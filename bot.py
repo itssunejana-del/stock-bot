@@ -12,7 +12,7 @@ app = Flask(__name__)
 
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
-GARDEN_BOT_USERNAME = "@gargenstockbot"
+GARDEN_BOT_ID = 7859360521  # ID бота @gargenstockbot
 
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -24,30 +24,17 @@ def send_telegram(text):
         logger.error(f"❌ Ошибка Telegram: {e}")
 
 def send_to_garden_bot(message):
-    """Отправляет сообщение боту @gargenstockbot"""
-    # Получаем ID чата с ботом
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
-    response = requests.get(url).json()
-    
-    # Ищем чат с @gargenstockbot
-    chat_id = None
-    for update in response.get('result', []):
-        if (update.get('message') and 
-            update['message'].get('chat', {}).get('username') == 'gargenstockbot'):
-            chat_id = update['message']['chat']['id']
-            break
-    
-    if not chat_id:
-        logger.error("❌ Не найден чат с @gargenstockbot")
-        return False
-    
-    # Отправляем сообщение
+    """Отправляет сообщение боту @gargenstockbot по ID"""
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {"chat_id": chat_id, "text": message}
+    data = {"chat_id": GARDEN_BOT_ID, "text": message}
     try:
         response = requests.post(url, data=data)
-        logger.info(f"📤 Отправлено боту: {message}")
-        return True
+        if response.json().get('ok'):
+            logger.info(f"📤 Отправлено боту: {message}")
+            return True
+        else:
+            logger.error(f"❌ Ошибка отправки: {response.json()}")
+            return False
     except Exception as e:
         logger.error(f"❌ Ошибка отправки боту: {e}")
         return False
@@ -86,14 +73,18 @@ def auto_request_stock():
     while True:
         try:
             # Сначала отправляем /start
+            logger.info("🔄 Отправляю /start боту...")
             success_start = send_to_garden_bot("/start")
             time.sleep(3)
             
             # Затем запрашиваем сток
+            logger.info("🔄 Отправляю '🌱 Сток'...")
             success_stock = send_to_garden_bot("🌱 Сток")
             
             if success_start and success_stock:
                 logger.info("✅ Команды отправлены")
+            else:
+                logger.error("❌ Ошибка отправки команд")
                 
         except Exception as e:
             logger.error(f"❌ Ошибка: {e}")
@@ -114,7 +105,7 @@ request_thread = threading.Thread(target=auto_request_stock)
 request_thread.daemon = True
 request_thread.start()
 
-send_telegram("🔍 Система запущена! Мониторю @gargenstockbot")
+send_telegram("🔍 Система запущена! Мониторю @gargenstockbot по ID")
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
