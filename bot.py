@@ -18,12 +18,15 @@ TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 SHOP_BOT_ID = 1392612367329923175  # ID бота магазина
 
-# Discord клиент
-client = discord.Client()
+# Discord клиент с intents
+intents = discord.Intents.default()
+intents.message_content = True
+client = discord.Client(intents=intents)
 
 @client.event
 async def on_ready():
     logger.info(f'✅ Discord бот вошел как {client.user}')
+    send_telegram("🤖 Discord бот подключен! Ожидаю Great Pumpkin...")
 
 @client.event
 async def on_message(message):
