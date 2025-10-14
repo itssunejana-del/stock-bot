@@ -32,17 +32,12 @@ def bot_worker():
 def home():
     return "🎃 Pumpkin Bot работает! Проверяю Discord..."
 
-# Запускаем бота в отдельном потоке ПРИ СТАРТЕ
-@app.before_first_request
-def start_bot():
-    bot_thread = threading.Thread(target=bot_worker)
-    bot_thread.daemon = True
-    bot_thread.start()
+# Запускаем бота сразу при импорте
+logger.info("✅ Запускаю бота...")
+bot_thread = threading.Thread(target=bot_worker)
+bot_thread.daemon = True
+bot_thread.start()
 
 if __name__ == '__main__':
-    logger.info("✅ Веб-сервер и бот запущены!")
-    # Сразу запускаем бота
-    bot_thread = threading.Thread(target=bot_worker)
-    bot_thread.daemon = True
-    bot_thread.start()
+    logger.info("🚀 Запускаю веб-сервер...")
     app.run(host='0.0.0.0', port=5000)
