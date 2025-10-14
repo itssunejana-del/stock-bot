@@ -3,6 +3,11 @@ import requests
 import os
 import threading
 import time
+import logging
+
+# Настраиваем логирование
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
+logger = logging.getLogger()
 
 app = Flask(__name__)
 
@@ -10,26 +15,34 @@ TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 
 def send_telegram(message):
-    print(f"Отправляю в Telegram: {message}")
-    # Пока только тестируем
+    logger.info(f"Отправляю в Telegram: {message}")
+    # Пока только логируем
 
 def bot_worker():
-    print("🎃 Бот-воркер запущен!")
+    logger.info("🎃 Бот-воркер запущен!")
     send_telegram("🤖 Бот запущен на Render и работает 24/7!")
     
+    counter = 0
     while True:
-        print("🔄 Бот проверяет сообщения...")
-        time.sleep(60)  # Проверяем каждую минуту
+        counter += 1
+        logger.info(f"🔄 Бот проверяет сообщения... (проверка #{counter})")
+        time.sleep(30)  # Проверяем каждые 30 секунд для теста
 
 @app.route('/')
 def home():
     return "🎃 Pumpkin Bot работает! Проверяю Discord..."
 
-# Запускаем бота в отдельном потоке
-bot_thread = threading.Thread(target=bot_worker)
-bot_thread.daemon = True
-bot_thread.start()
+# Запускаем бота в отдельном потоке ПРИ СТАРТЕ
+@app.before_first_request
+def start_bot():
+    bot_thread = threading.Thread(target=bot_worker)
+    bot_thread.daemon = True
+    bot_thread.start()
 
 if __name__ == '__main__':
-    print("✅ Веб-сервер и бот запущены!")
+    logger.info("✅ Веб-сервер и бот запущены!")
+    # Сразу запускаем бота
+    bot_thread = threading.Thread(target=bot_worker)
+    bot_thread.daemon = True
+    bot_thread.start()
     app.run(host='0.0.0.0', port=5000)
