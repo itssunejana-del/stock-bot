@@ -16,10 +16,12 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 DISCORD_CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')
 
-# Храним время последнего уведомления для каждого сообщения
-last_notification_times = {}
-# Время в течение которого не отправляем повторные уведомления для того же сообщения
-NOTIFICATION_COOLDOWN = timedelta(minutes=4)  # 4 минуты - меньше чем интервал Vulcan
+# Храним ID последнего обработанного сообщения
+last_processed_message_id = None
+# Время последнего уведомления
+last_notification_time = None
+# Минимальный интервал между уведомлениями (5 минут)
+NOTIFICATION_COOLDOWN = timedelta(minutes=5)
 
 def send_telegram(text):
     """Отправляет сообщение в Telegram"""
@@ -34,66 +36,77 @@ def send_telegram(text):
         return False
 
 def check_discord_messages():
-    """Проверяет сообщения и эмбады в канале Discord"""
-    global last_notification_times
+    """Проверяет самое последнее сообщение в канале Discord"""
+    global last_processed_message_id, last_notification_time
     
     try:
-        url = f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages?limit=3"  # Только 3 последних
+        url = f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages?limit=1"  # Только 1 последнее сообщение
         headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
         
         response = requests.get(url, headers=headers, timeout=10)
         
         if response.status_code == 200:
             messages = response.json()
-            current_time = datetime.now()
             
-            # Ищем самое новое сообщение с Tomato
-            for message in messages:
-                message_id = message['id']
-                author = message['author']['username']
-                content = message.get('content', '')
-                embeds = message.get('embeds', [])
+            if not messages:
+                return False, "Нет сообщений в канале", None
+            
+            message = messages[0]  # Самое последнее сообщение
+            message_id = message['id']
+            author = message['author']['username']
+            content = message.get('content', '')
+            embeds = message.get('embeds', [])
+            
+            # Пропускаем если это сообщение уже обрабатывали
+            if message_id == last_processed_message_id:
+                return False, "Сообщение уже обработано", message_id
+            
+            # Проверяем эмбады на наличие Tomato
+            for embed in embeds:
+                # Собираем весь текст из эмбада
+                all_embed_text = ""
                 
-                # Проверяем эмбады на наличие Tomato
-                for embed in embeds:
-                    # Собираем весь текст из эмбада
-                    all_embed_text = ""
+                # Добавляем поля эмбада
+                for field in embed.get('fields', []):
+                    all_embed_text += f" {field.get('name', '')} {field.get('value', '')}"
+                
+                # Добавляем описание и заголовок
+                all_embed_text += f" {embed.get('description', '')} {embed.get('title', '')}"
+                
+                # Ищем Tomato в любом виде
+                if any(tomato_keyword in all_embed_text for tomato_keyword in ['Tomato', ':Tomato:', '🍅']):
+                    logger.info(f"🎯 НОВЫЙ TOMATO НАЙДЕН В СООБЩЕНИИ {message_id}!")
                     
-                    # Добавляем поля эмбада
+                    current_time = datetime.now()
+                    
+                    # Проверяем глобальный кулдаун
+                    if last_notification_time and (current_time - last_notification_time) < NOTIFICATION_COOLDOWN:
+                        logger.info(f"⏳ Пропускаем уведомление - глобальный кулдаун активен")
+                        # Но все равно отмечаем сообщение как обработанное
+                        last_processed_message_id = message_id
+                        return False, "Глобальный кулдаун активен", message_id
+                    
+                    # Формируем сообщение для Telegram
+                    telegram_message = f"🚨 TOMATO В ПРОДАЖЕ! 🍅\n\n"
+                    
+                    # Добавляем информацию из эмбада
                     for field in embed.get('fields', []):
-                        all_embed_text += f" {field.get('name', '')} {field.get('value', '')}"
+                        field_name = field.get('name', '')
+                        field_value = field.get('value', '')
+                        if field_name and field_value:
+                            telegram_message += f"• {field_name}: {field_value}\n"
                     
-                    # Добавляем описание и заголовок
-                    all_embed_text += f" {embed.get('description', '')} {embed.get('title', '')}"
+                    # Обновляем время последнего уведомления и ID сообщения
+                    last_notification_time = current_time
+                    last_processed_message_id = message_id
                     
-                    # Ищем Tomato в любом виде
-                    if any(tomato_keyword in all_embed_text for tomato_keyword in ['Tomato', ':Tomato:', '🍅']):
-                        logger.info(f"🎯 TOMATO НАЙДЕН В СООБЩЕНИИ {message_id}!")
-                        
-                        # Проверяем кулдаун для этого сообщения
-                        last_notification_time = last_notification_times.get(message_id)
-                        
-                        if last_notification_time and (current_time - last_notification_time) < NOTIFICATION_COOLDOWN:
-                            logger.info(f"⏳ Пропускаем уведомление для {message_id} - кулдаун еще активен")
-                            return False, "Кулдаун активен", message_id
-                        
-                        # Формируем сообщение для Telegram
-                        telegram_message = f"🚨 TOMATO В ПРОДАЖЕ! 🍅\n\n"
-                        
-                        # Добавляем информацию из эмбада
-                        for field in embed.get('fields', []):
-                            field_name = field.get('name', '')
-                            field_value = field.get('value', '')
-                            if field_name and field_value:
-                                telegram_message += f"• {field_name}: {field_value}\n"
-                        
-                        # Обновляем время последнего уведомления для этого сообщения
-                        last_notification_times[message_id] = current_time
-                        logger.info(f"✅ Установлен кулдаун для сообщения {message_id}")
-                        
-                        return True, telegram_message, message_id
+                    logger.info(f"✅ Готово к отправке уведомления для {message_id}")
+                    
+                    return True, telegram_message, message_id
             
-            return False, "Tomato не найден в новых сообщениях", None
+            # Если Tomato не найден, все равно отмечаем сообщение как обработанное
+            last_processed_message_id = message_id
+            return False, "Tomato не найден в последнем сообщении", message_id
             
         else:
             return False, f"Ошибка API: {response.status_code}", None
@@ -107,13 +120,21 @@ def home():
     return """
     <h1>🍅 Tomato Monitor Bot</h1>
     <p>Бот работает и мониторит канал Discord!</p>
-    <p>Активные кулдауны: <b id="cooldowns">Загрузка...</b></p>
-    <p><a href="/check">🔍 Проверить сообщения</a></p>
-    <p><a href="/reset">🔄 Сбросить все кулдауны</a></p>
+    <p>Последнее сообщение: <b id="lastMsg">Загрузка...</b></p>
+    <p>Последнее уведомление: <b id="lastNotif">Загрузка...</b></p>
+    <p><a href="/check">🔍 Проверить сейчас</a></p>
+    <p><a href="/reset">🔄 Сбросить кулдаун</a></p>
     <script>
-        fetch('/cooldowns').then(r => r.text()).then(msg => {
-            document.getElementById('cooldowns').textContent = msg;
-        });
+        function updateStatus() {
+            fetch('/last_message').then(r => r.text()).then(msg => {
+                document.getElementById('lastMsg').textContent = msg || 'Нет сообщений';
+            });
+            fetch('/last_notification').then(r => r.text()).then(msg => {
+                document.getElementById('lastNotif').textContent = msg || 'Нет уведомлений';
+            });
+        }
+        updateStatus();
+        setInterval(updateStatus, 5000);
     </script>
     """
 
@@ -124,6 +145,10 @@ def check_messages():
     
     result = "🍅 TOMATO НАЙДЕН!" if found else "❌ Tomato не найден"
     
+    if found:
+        success = send_telegram(message)
+        result += " ✅ Уведомление отправлено!" if success else " ❌ Ошибка отправки"
+    
     return f"""
     <h1>Результат проверки</h1>
     <p>Результат: <b>{result}</b></p>
@@ -133,35 +158,42 @@ def check_messages():
     """
 
 @app.route('/reset')
-def reset_cooldowns():
-    """Сбрасывает все кулдауны"""
-    global last_notification_times
-    last_notification_times = {}
+def reset_cooldown():
+    """Сбрасывает кулдаун"""
+    global last_notification_time
+    last_notification_time = None
     return """
-    <h1>🔄 Все кулдауны сброшены!</h1>
-    <p>Бот будет отправлять уведомления для всех сообщений.</p>
+    <h1>🔄 Кулдаун сброшен!</h1>
+    <p>Бот отправит уведомление при следующем обнаружении Tomato.</p>
     <p><a href="/">← Назад</a></p>
     """
 
-@app.route('/cooldowns')
-def get_cooldowns():
-    """Возвращает активные кулдауны"""
-    global last_notification_times
-    current_time = datetime.now()
-    
-    active_cooldowns = []
-    for msg_id, last_time in last_notification_times.items():
-        time_left = NOTIFICATION_COOLDOWN - (current_time - last_time)
+@app.route('/last_message')
+def get_last_message():
+    """Возвращает ID последнего обработанного сообщения"""
+    global last_processed_message_id
+    return last_processed_message_id or "Нет обработанных сообщений"
+
+@app.route('/last_notification')
+def get_last_notification():
+    """Возвращает время последнего уведомления"""
+    global last_notification_time
+    if last_notification_time:
+        time_passed = datetime.now() - last_notification_time
+        minutes_passed = int(time_passed.total_seconds() / 60)
+        seconds_passed = int(time_passed.total_seconds() % 60)
+        time_left = NOTIFICATION_COOLDOWN - time_passed
         if time_left.total_seconds() > 0:
             minutes_left = int(time_left.total_seconds() / 60)
             seconds_left = int(time_left.total_seconds() % 60)
-            active_cooldowns.append(f"{msg_id[:10]}... ({minutes_left}м {seconds_left}с)")
-    
-    return ", ".join(active_cooldowns) if active_cooldowns else "Нет активных кулдаунов"
+            return f"{last_notification_time.strftime('%H:%M:%S')} ({minutes_passed}м {seconds_passed}с назад) - кулдаун: {minutes_left}м {seconds_left}с"
+        else:
+            return f"{last_notification_time.strftime('%H:%M:%S')} ({minutes_passed}м {seconds_passed}с назад) - готов к отправке"
+    return "Нет уведомлений"
 
 def discord_monitor():
     """Основной мониторинг"""
-    logger.info("🔄 ЗАПУСК МОНИТОРИНГА С КУЛДАУНОМ")
+    logger.info("🔄 ЗАПУСК ФИНАЛЬНОГО МОНИТОРИНГА")
     
     while True:
         try:
@@ -175,17 +207,17 @@ def discord_monitor():
                 else:
                     logger.error("❌ Не удалось отправить уведомление в Telegram")
             else:
-                logger.info("🔍 Tomato не найден или кулдаун активен")
+                logger.info("🔍 Новых сообщений с Tomato нет")
                 
-            time.sleep(30)  # Проверяем каждые 30 секунд
+            time.sleep(10)  # Проверяем каждые 10 секунд для быстрого реагирования
             
         except Exception as e:
             logger.error(f"❌ Ошибка мониторинга: {e}")
-            time.sleep(60)
+            time.sleep(30)
 
 # Запускаем приложение
 if __name__ == '__main__':
-    logger.info("🚀 ЗАПУСК СИСТЕМЫ С КУЛДАУНОМ")
+    logger.info("🚀 ЗАПУСК ФИНАЛЬНОЙ СИСТЕМЫ")
     
     # Запускаем мониторинг в отдельном потоке
     monitor_thread = threading.Thread(target=discord_monitor)
@@ -193,6 +225,6 @@ if __name__ == '__main__':
     monitor_thread.start()
     
     # Отправляем уведомление о запуске
-    send_telegram("🔍 Бот перезапущен! Мониторинг Tomato с кулдауном 4 минуты...")
+    send_telegram("🔍 Бот запущен! Мониторинг Tomato каждые 10 секунд...")
     
     app.run(host='0.0.0.0', port=5000)
