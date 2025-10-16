@@ -12,100 +12,70 @@ app = Flask(__name__)
 
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
-GARDEN_BOT_ID = 7859360521  # ID бота @gargenstockbot
+DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')  # Добавим токен Discord
+
+# ID канала #стоки-гроу (нужно получить)
+DISCORD_CHANNEL_ID = "ВАШ_ID_КАНАЛА_СТОКИ_ГРОУ"
 
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     data = {"chat_id": TELEGRAM_CHAT_ID, "text": text}
     try:
         requests.post(url, data=data)
-        logger.info("✅ Уведомление отправлено")
+        logger.info("✅ Уведомление отправлено в Telegram")
     except Exception as e:
         logger.error(f"❌ Ошибка Telegram: {e}")
 
-def send_to_garden_bot(message):
-    """Отправляет сообщение боту @gargenstockbot по ID"""
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    data = {"chat_id": GARDEN_BOT_ID, "text": message}
+def check_discord_channel():
+    """Проверяет сообщения в канале Discord"""
     try:
-        response = requests.post(url, data=data)
-        if response.json().get('ok'):
-            logger.info(f"📤 Отправлено боту: {message}")
-            return True
-        else:
-            logger.error(f"❌ Ошибка отправки: {response.json()}")
-            return False
+        url = f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages"
+        headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
+        
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            messages = response.json()
+            # Берем последнее сообщение
+            if messages and 'Tomato' in messages[0]['content']:
+                return True, messages[0]['content']
+        return False, None
     except Exception as e:
-        logger.error(f"❌ Ошибка отправки боту: {e}")
-        return False
+        logger.error(f"❌ Ошибка проверки Discord: {e}")
+        return False, None
 
-def monitor_responses():
-    """Мониторит ответы от @gargenstockbot"""
-    logger.info("👂 Начинаю мониторинг ответов...")
-    last_update_id = 0
+def discord_monitor():
+    """Мониторит канал Discord"""
+    logger.info("🔍 Начинаю мониторинг канала #стоки-гроу...")
+    send_telegram("🔍 Начинаю мониторинг стока! Ожидаю Tomato...")
+    
+    last_detected = False
     
     while True:
         try:
-            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
-            params = {"offset": last_update_id + 1, "timeout": 30}
-            response = requests.get(url, params=params).json()
+            found, message = check_discord_channel()
             
-            for update in response.get('result', []):
-                last_update_id = update['update_id']
+            if found and not last_detected:
+                logger.info("🍅 TOMATO ОБНАРУЖЕН!")
+                send_telegram("🍅 TOMATO В ПРОДАЖЕ! 🍅")
+                send_telegram(f"📋 Актуальный сток:\n{message}")
+                last_detected = True
+            elif not found:
+                last_detected = False
                 
-                if (update.get('message') and 
-                    update['message'].get('text') and
-                    'Помидор' in update['message']['text']):
-                    
-                    logger.info("🍅 НАЙДЕН ПОМИДОР В ОТВЕТЕ!")
-                    send_telegram("🍅 🍅 🍅 ПОМИДОР ОБНАРУЖЕН! 🍅 🍅 🍅")
-                    send_telegram(f"📋 Сообщение: {update['message']['text']}")
-                    
         except Exception as e:
             logger.error(f"❌ Ошибка мониторинга: {e}")
             
-        time.sleep(5)
-
-def auto_request_stock():
-    """Автоматически запрашивает сток"""
-    logger.info("🤖 Запускаю автоматические запросы...")
-    
-    while True:
-        try:
-            # Сначала отправляем /start
-            logger.info("🔄 Отправляю /start боту...")
-            success_start = send_to_garden_bot("/start")
-            time.sleep(3)
-            
-            # Затем запрашиваем сток
-            logger.info("🔄 Отправляю '🌱 Сток'...")
-            success_stock = send_to_garden_bot("🌱 Сток")
-            
-            if success_start and success_stock:
-                logger.info("✅ Команды отправлены")
-            else:
-                logger.error("❌ Ошибка отправки команд")
-                
-        except Exception as e:
-            logger.error(f"❌ Ошибка: {e}")
-            
-        time.sleep(60)
+        time.sleep(60)  # Проверяем каждую минуту
 
 @app.route('/')
 def home():
-    return "🤖 Мониторю @gargenstockbot через getUpdates"
+    return "🍅 Мониторю канал #стоки-гроу на предмет Tomato"
 
-# Запускаем оба потока
-logger.info("🚀 Запускаю систему...")
-monitor_thread = threading.Thread(target=monitor_responses)
+# Запускаем монитор
+logger.info("🚀 Запускаю Discord монитор...")
+monitor_thread = threading.Thread(target=discord_monitor)
 monitor_thread.daemon = True
 monitor_thread.start()
-
-request_thread = threading.Thread(target=auto_request_stock)
-request_thread.daemon = True
-request_thread.start()
-
-send_telegram("🔍 Система запущена! Мониторю @gargenstockbot по ID")
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
