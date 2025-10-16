@@ -9,22 +9,11 @@ import sys
 # Настраиваем детальное логирование
 logging.basicConfig(
     level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler('bot_debug.log')
-    ]
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-
-# Логируем переменные окружения (без токенов)
-logger.info("🔧 ПРОВЕРКА ПЕРЕМЕННЫХ ОКРУЖЕНИЯ:")
-logger.info(f"📝 TELEGRAM_TOKEN: {'ЕСТЬ' if os.getenv('TELEGRAM_TOKEN') else 'НЕТ'}")
-logger.info(f"📝 TELEGRAM_CHAT_ID: {'ЕСТЬ' if os.getenv('TELEGRAM_CHAT_ID') else 'НЕТ'}")
-logger.info(f"📝 DISCORD_TOKEN: {'ЕСТЬ' if os.getenv('DISCORD_TOKEN') else 'НЕТ'}")
-logger.info(f"📝 DISCORD_CHANNEL_ID: {'ЕСТЬ' if os.getenv('DISCORD_CHANNEL_ID') else 'НЕТ'}")
 
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
@@ -32,42 +21,38 @@ DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 DISCORD_CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')
 
 def test_discord_connection():
-    """ТЕСТИРУЕТ ПОДКЛЮЧЕНИЕ К DISCORD С ДЕТАЛЬНЫМ ЛОГИРОВАНИЕМ"""
+    """ТЕСТИРУЕТ ПОДКЛЮЧЕНИЕ К DISCORD"""
     try:
-        logger.info("🚀 НАЧИНАЮ ТЕСТ ПОДКЛЮЧЕНИЯ К DISCORD")
+        logger.info("🚀 ТЕСТ ПОДКЛЮЧЕНИЯ К DISCORD")
         
-        # Проверяем базовое подключение бота
+        # 1. Проверяем базовое подключение бота
         url = "https://discord.com/api/v10/users/@me"
         headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
         
-        logger.debug(f"🔗 URL: {url}")
-        logger.debug(f"📝 Заголовки: Authorization: Bot {DISCORD_TOKEN[:15]}...")
-        
         response = requests.get(url, headers=headers, timeout=10)
-        
-        logger.info(f"📡 ОТВЕТ DISCORD API:")
-        logger.info(f"   Статус: {response.status_code}")
-        logger.info(f"   Текст: {response.text[:200]}...")
         
         if response.status_code == 200:
             bot_data = response.json()
-            logger.info(f"✅ БОТ УСПЕШНО ПОДКЛЮЧЕН:")
-            logger.info(f"   Имя: {bot_data['username']}#{bot_data['discriminator']}")
-            logger.info(f"   ID: {bot_data['id']}")
-            return True, "Бот подключен"
+            logger.info(f"✅ БОТ ПОДКЛЮЧЕН: {bot_data['username']}")
+            
+            # 2. Проверяем доступ к каналу
+            url_channel = f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages?limit=5"
+            response_channel = requests.get(url_channel, headers=headers, timeout=10)
+            
+            if response_channel.status_code == 200:
+                messages = response_channel.json()
+                logger.info(f"✅ ДОСТУП К КАНАЛУ: {len(messages)} сообщений")
+                return True, f"Бот {bot_data['username']} подключен. Доступ к каналу: {len(messages)} сообщений"
+            else:
+                logger.error(f"❌ НЕТ ДОСТУПА К КАНАЛУ: {response_channel.status_code}")
+                return False, f"Нет доступа к каналу: {response_channel.status_code}"
         else:
             logger.error(f"❌ ОШИБКА ПОДКЛЮЧЕНИЯ: {response.status_code}")
-            return False, f"Ошибка {response.status_code}: {response.text}"
+            return False, f"Ошибка подключения: {response.status_code}"
             
-    except requests.exceptions.Timeout:
-        logger.error("⏰ ТАЙМАУТ ПОДКЛЮЧЕНИЯ К DISCORD")
-        return False, "Таймаут подключения"
-    except requests.exceptions.ConnectionError:
-        logger.error("🌐 ОШИБКА СОЕДИНЕНИЯ С DISCORD")
-        return False, "Ошибка соединения"
     except Exception as e:
-        logger.error(f"💥 КРИТИЧЕСКАЯ ОШИБКА: {str(e)}", exc_info=True)
-        return False, f"Критическая ошибка: {str(e)}"
+        logger.error(f"💥 ОШИБКА: {e}")
+        return False, f"Ошибка: {str(e)}"
 
 def send_telegram(text):
     """Отправляет сообщение в Telegram"""
@@ -75,16 +60,57 @@ def send_telegram(text):
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         data = {"chat_id": TELEGRAM_CHAT_ID, "text": text}
         response = requests.post(url, data=data, timeout=10)
-        logger.info(f"📱 Telegram ответ: {response.status_code}")
+        logger.info(f"📱 Telegram: {response.status_code}")
     except Exception as e:
         logger.error(f"❌ Ошибка Telegram: {e}")
 
+def check_discord_messages():
+    """Проверяет сообщения в канале Discord"""
+    try:
+        url = f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages?limit=50"
+        headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
+        
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code == 200:
+            messages = response.json()
+            logger.info(f"📨 Получено {len(messages)} сообщений")
+            
+            # Ищем Tomato в сообщениях
+            for message in messages:
+                content = message.get('content', '')
+                
+                # Проверяем текст сообщения
+                if 'Tomato' in content or ':Tomato:' in content:
+                    logger.info("🍅 TOMATO НАЙДЕН В ТЕКСТЕ!")
+                    return True, content
+                
+                # Проверяем эмбады
+                for embed in message.get('embeds', []):
+                    embed_text = str(embed.get('description', '')) + str(embed.get('title', ''))
+                    if 'Tomato' in embed_text:
+                        logger.info("🍅 TOMATO НАЙДЕН В ЭМБАДЕ!")
+                        return True, embed_text
+            
+            return False, "Tomato не найден"
+        else:
+            return False, f"Ошибка API: {response.status_code}"
+            
+    except Exception as e:
+        return False, f"Ошибка: {str(e)}"
+
 @app.route('/')
 def home():
-    return "🍅 Мониторю канал на предмет Tomato"
+    return """
+    <h1>🍅 Tomato Monitor Bot</h1>
+    <p>Бот работает и мониторит канал Discord!</p>
+    <p><a href="/test">🧪 Тест подключения</a></p>
+    <p><a href="/status">📊 Статус</a></p>
+    <p><a href="/check">🔍 Проверить сообщения</a></p>
+    """
 
 @app.route('/test')
-def test():
+def test_connection():
     """Страница для тестирования подключения"""
     logger.info("🧪 ЗАПУСК ТЕСТА ПОДКЛЮЧЕНИЯ")
     success, message = test_discord_connection()
@@ -94,41 +120,77 @@ def test():
     send_telegram(f"{status}: {message}")
     
     return f"""
-    <h1>Результат теста</h1>
+    <h1>Результат теста подключения</h1>
     <p>Статус: <b>{status}</b></p>
     <p>Сообщение: {message}</p>
-    <p>Проверьте логи в Render для деталей</p>
+    <p><a href="/">← Назад</a></p>
     """
 
-def start_monitoring():
-    """Запускает мониторинг после теста"""
-    logger.info("🔄 ЗАПУСК МОНИТОРИНГА...")
-    # Здесь будет основной код мониторинга
-    
-    # Тестовый цикл
-    while True:
-        success, message = test_discord_connection()
-        if success:
-            logger.info("🎯 Бот работает, можно начинать мониторинг")
-            break
-        else:
-            logger.error("🔄 Повторная попытка через 30 секунд...")
-            time.sleep(30)
-
-if __name__ == '__main__':
-    logger.info("🚀 ЗАПУСК ПРИЛОЖЕНИЯ")
-    
-    # Запускаем тест подключения
+@app.route('/status')
+def status():
+    """Страница статуса"""
     success, message = test_discord_connection()
+    return f"""
+    <h1>📊 Статус системы</h1>
+    <p>Discord: <b>{'✅ Подключен' if success else '❌ Ошибка'}</b></p>
+    <p>Сообщение: {message}</p>
+    <p>Telegram: ✅ Настроен</p>
+    <p><a href="/">← Назад</a></p>
+    """
+
+@app.route('/check')
+def check_messages():
+    """Проверяет сообщения на наличие Tomato"""
+    logger.info("🔍 ПРОВЕРКА СООБЩЕНИЙ")
+    found, message = check_discord_messages()
     
-    if success:
-        send_telegram("✅ Бот успешно подключен к Discord!")
-        logger.info("✅ Начинаем мониторинг")
-        monitor_thread = threading.Thread(target=start_monitoring)
-        monitor_thread.daemon = True
-        monitor_thread.start()
-    else:
-        send_telegram(f"❌ Ошибка подключения: {message}")
-        logger.error("❌ Невозможно начать мониторинг из-за ошибки подключения")
+    result = "🍅 TOMATO НАЙДЕН!" if found else "❌ Tomato не найден"
+    
+    if found:
+        send_telegram(f"🚨 ТЕСТ: {result}")
+        send_telegram(f"📋 {message[:200]}...")
+    
+    return f"""
+    <h1>Результат проверки</h1>
+    <p>Результат: <b>{result}</b></p>
+    <p>Сообщение: {message[:500] if found else message}</p>
+    <p><a href="/">← Назад</a></p>
+    """
+
+def discord_monitor():
+    """Основной мониторинг"""
+    logger.info("🔄 ЗАПУСК ОСНОВНОГО МОНИТОРИНГА")
+    
+    last_detected = False
+    
+    while True:
+        try:
+            found, message = check_discord_messages()
+            
+            if found and not last_detected:
+                logger.info("🎯 TOMATO ОБНАРУЖЕН - ОТПРАВЛЯЮ УВЕДОМЛЕНИЕ!")
+                send_telegram("🚨 TOMATO В ПРОДАЖЕ! 🍅")
+                send_telegram(f"📋 {message}")
+                last_detected = True
+            elif not found:
+                last_detected = False
+                
+            time.sleep(30)  # Проверяем каждые 30 секунд
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка мониторинга: {e}")
+            time.sleep(60)
+
+# Запускаем приложение
+if __name__ == '__main__':
+    logger.info("🚀 ЗАПУСК СИСТЕМЫ")
+    
+    # Запускаем мониторинг в отдельном потоке
+    monitor_thread = threading.Thread(target=discord_monitor)
+    monitor_thread.daemon = True
+    monitor_thread.start()
+    
+    # Отправляем уведомление о запуске
+    send_telegram("🔍 Бот запущен! Начинаю мониторинг Tomato...")
     
     app.run(host='0.0.0.0', port=5000)
