@@ -4,7 +4,6 @@ import os
 import time
 import logging
 import threading
-import json
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -16,13 +15,16 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 DISCORD_CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')
 
+# Храним ID последнего обработанного сообщения с Tomato
+last_processed_message_id = None
+
 def send_telegram(text):
     """Отправляет сообщение в Telegram"""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         data = {"chat_id": TELEGRAM_CHAT_ID, "text": text}
         response = requests.post(url, data=data, timeout=10)
-        logger.info(f"📱 Telegram: {response.status_code}")
+        logger.info(f"📱 Telegram отправлено: {response.status_code}")
         return True
     except Exception as e:
         logger.error(f"❌ Ошибка Telegram: {e}")
@@ -30,148 +32,132 @@ def send_telegram(text):
 
 def check_discord_messages():
     """Проверяет сообщения и эмбады в канале Discord"""
+    global last_processed_message_id
+    
     try:
-        url = f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages?limit=10"
+        url = f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages?limit=5"  # Только 5 последних
         headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
         
-        logger.info("🔍 Проверяю последние 10 сообщений...")
         response = requests.get(url, headers=headers, timeout=10)
         
         if response.status_code == 200:
             messages = response.json()
-            logger.info(f"📨 Найдено сообщений: {len(messages)}")
             
-            # Проверяем каждое сообщение
-            for i, message in enumerate(messages):
+            # Ищем самое новое сообщение с Tomato
+            for message in messages:
                 message_id = message['id']
                 author = message['author']['username']
                 content = message.get('content', '')
                 embeds = message.get('embeds', [])
                 
-                logger.info(f"📝 Сообщение {i+1} от {author}:")
-                logger.info(f"   🆔 ID: {message_id}")
-                logger.info(f"   📄 Текст: '{content[:50]}...'" if content else "   📄 Текст: ПУСТО")
-                logger.info(f"   🎨 Эмбадов: {len(embeds)}")
+                # Пропускаем если это сообщение уже обрабатывали
+                if message_id == last_processed_message_id:
+                    continue
                 
-                # ДЕТАЛЬНОЕ ЛОГИРОВАНИЕ ЭМБАДОВ
-                for j, embed in enumerate(embeds):
-                    logger.info(f"   🔍 Эмбад {j+1}:")
+                # Проверяем эмбады на наличие Tomato
+                for embed in embeds:
+                    # Собираем весь текст из эмбада
+                    all_embed_text = ""
                     
-                    # Все возможные поля эмбада
-                    title = embed.get('title', 'НЕТ ЗАГОЛОВКА')
-                    description = embed.get('description', 'НЕТ ОПИСАНИЯ')
-                    fields = embed.get('fields', [])
+                    # Добавляем поля эмбада
+                    for field in embed.get('fields', []):
+                        all_embed_text += f" {field.get('name', '')} {field.get('value', '')}"
                     
-                    logger.info(f"      📌 Заголовок: {title}")
-                    logger.info(f"      📋 Описание: {description[:100]}...")
-                    logger.info(f"      📊 Полей: {len(fields)}")
-                    
-                    # Проверяем все текстовые части эмбада на Tomato
-                    all_embed_text = f"{title} {description}"
-                    
-                    # Добавляем текст из полей (fields)
-                    for field in fields:
-                        field_name = field.get('name', '')
-                        field_value = field.get('value', '')
-                        all_embed_text += f" {field_name} {field_value}"
-                    
-                    logger.info(f"      🔎 Весь текст эмбада: {all_embed_text[:150]}...")
+                    # Добавляем описание и заголовок
+                    all_embed_text += f" {embed.get('description', '')} {embed.get('title', '')}"
                     
                     # Ищем Tomato в любом виде
                     if any(tomato_keyword in all_embed_text for tomato_keyword in ['Tomato', ':Tomato:', '🍅']):
-                        logger.info("🎯 TOMATO НАЙДЕН В ЭМБАДЕ!")
+                        logger.info(f"🎯 НОВЫЙ TOMATO НАЙДЕН В СООБЩЕНИИ {message_id}!")
                         
-                        # Формируем красивое сообщение для Telegram
+                        # Формируем сообщение для Telegram
                         telegram_message = f"🚨 TOMATO В ПРОДАЖЕ! 🍅\n\n"
                         
-                        if title and title != 'НЕТ ЗАГОЛОВКА':
-                            telegram_message += f"📌 {title}\n"
-                        
-                        if description and description != 'НЕТ ОПИСАНИЯ':
-                            telegram_message += f"📋 {description}\n"
-                        
-                        # Добавляем поля если есть
-                        for field in fields:
+                        # Добавляем информацию из эмбада
+                        for field in embed.get('fields', []):
                             field_name = field.get('name', '')
                             field_value = field.get('value', '')
                             if field_name and field_value:
-                                telegram_message += f"• {field_name}: {field_value}\n"
+                                telegram_message += f"• {field_name}: {field_value}\\n"
                         
-                        return True, telegram_message
-                
-                # Также проверяем обычный текст сообщения
-                if any(tomato_keyword in content for tomato_keyword in ['Tomato', ':Tomato:', '🍅']):
-                    logger.info("🎯 TOMATO НАЙДЕН В ТЕКСТЕ!")
-                    return True, f"🚨 TOMATO В ПРОДАЖЕ! 🍅\n\n{content}"
+                        # Обновляем последнее обработанное сообщение
+                        last_processed_message_id = message_id
+                        
+                        return True, telegram_message, message_id
             
-            return False, "Tomato не найден в последних сообщениях"
+            return False, "Tomato не найден в новых сообщениях", None
+            
         else:
-            logger.error(f"❌ Ошибка Discord API: {response.status_code}")
-            return False, f"Ошибка API: {response.status_code}"
+            return False, f"Ошибка API: {response.status_code}", None
             
     except Exception as e:
         logger.error(f"💥 Ошибка при проверке сообщений: {e}")
-        return False, f"Ошибка: {str(e)}"
+        return False, f"Ошибка: {str(e)}", None
 
 @app.route('/')
 def home():
     return """
     <h1>🍅 Tomato Monitor Bot</h1>
     <p>Бот работает и мониторит канал Discord!</p>
-    <p><a href="/check">🔍 Проверить сообщения (ДЕТАЛЬНЫЙ АНАЛИЗ)</a></p>
-    <p><a href="/test">🧪 Тест уведомления</a></p>
+    <p>Последнее обработанное сообщение: <b id="lastMsg">Загрузка...</b></p>
+    <p><a href="/check">🔍 Проверить сообщения</a></p>
+    <p><a href="/reset">🔄 Сбросить историю</a></p>
+    <script>
+        fetch('/last_message').then(r => r.text()).then(msg => {
+            document.getElementById('lastMsg').textContent = msg || 'Нет сообщений';
+        });
+    </script>
     """
 
 @app.route('/check')
 def check_messages():
-    """Проверяет сообщения с детальным анализом"""
-    logger.info("🔍 ЗАПУСК ДЕТАЛЬНОЙ ПРОВЕРКИ СООБЩЕНИЙ")
-    found, message = check_discord_messages()
+    """Проверяет сообщения"""
+    found, message, msg_id = check_discord_messages()
     
     result = "🍅 TOMATO НАЙДЕН!" if found else "❌ Tomato не найден"
     
     return f"""
     <h1>Результат проверки</h1>
     <p>Результат: <b>{result}</b></p>
+    <p>ID сообщения: {msg_id or 'Нет'}</p>
     <p>Сообщение: {message}</p>
-    <p><small>Проверьте логи в Render для детальной информации</small></p>
     <p><a href="/">← Назад</a></p>
     """
 
-@app.route('/test')
-def test_notification():
-    """Тестовая страница - отправляет fake уведомление"""
-    test_message = """Vulcan • Grow a Garden Stocks
-SEEDS STOCK
-:Tomato: Tomato x5
-:Carrot: Carrot x10
-:Strawberry: Strawberry x3"""
-    
-    send_telegram("🧪 ТЕСТ: TOMATO В ПРОДАЖЕ! 🍅")
-    send_telegram(f"📋 {test_message}")
-    
+@app.route('/reset')
+def reset_history():
+    """Сбрасывает историю обработанных сообщений"""
+    global last_processed_message_id
+    last_processed_message_id = None
     return """
-    <h1>🧪 Тестовое уведомление отправлено!</h1>
-    <p>Проверьте Telegram - должно прийти тестовое сообщение о Tomato</p>
+    <h1>🔄 История сброшена!</h1>
+    <p>Бот будет обрабатывать все сообщения заново.</p>
     <p><a href="/">← Назад</a></p>
     """
+
+@app.route('/last_message')
+def get_last_message():
+    """Возвращает ID последнего обработанного сообщения"""
+    global last_processed_message_id
+    return last_processed_message_id or "Нет обработанных сообщений"
 
 def discord_monitor():
     """Основной мониторинг"""
-    logger.info("🔄 ЗАПУСК ОСНОВНОГО МОНИТОРИНГА")
-    
-    last_detected = False
+    logger.info("🔄 ЗАПУСК ИСПРАВЛЕННОГО МОНИТОРИНГА")
     
     while True:
         try:
-            found, message = check_discord_messages()
+            found, message, message_id = check_discord_messages()
             
-            if found and not last_detected:
-                logger.info("🎯 TOMATO ОБНАРУЖЕН - ОТПРАВЛЯЮ УВЕДОМЛЕНИЕ!")
-                send_telegram(message)
-                last_detected = True
-            elif not found:
-                last_detected = False
+            if found:
+                logger.info(f"🎯 ОТПРАВЛЯЮ УВЕДОМЛЕНИЕ ДЛЯ СООБЩЕНИЯ {message_id}!")
+                success = send_telegram(message)
+                if success:
+                    logger.info("✅ Уведомление успешно отправлено в Telegram!")
+                else:
+                    logger.error("❌ Не удалось отправить уведомление в Telegram")
+            else:
+                logger.info("🔍 Tomato не найден в новых сообщениях")
                 
             time.sleep(30)  # Проверяем каждые 30 секунд
             
@@ -181,7 +167,7 @@ def discord_monitor():
 
 # Запускаем приложение
 if __name__ == '__main__':
-    logger.info("🚀 ЗАПУСК СИСТЕМЫ")
+    logger.info("🚀 ЗАПУСК ИСПРАВЛЕННОЙ СИСТЕМЫ")
     
     # Запускаем мониторинг в отдельном потоке
     monitor_thread = threading.Thread(target=discord_monitor)
@@ -189,6 +175,6 @@ if __name__ == '__main__':
     monitor_thread.start()
     
     # Отправляем уведомление о запуске
-    send_telegram("🔍 Бот перезапущен! Начинаю мониторинг Tomato...")
+    send_telegram("🔍 Бот перезапущен! Мониторинг Tomato...")
     
     app.run(host='0.0.0.0', port=5000)
