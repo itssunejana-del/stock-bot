@@ -1,9 +1,7 @@
-from flask import Flask
+from flask import Flask, request
 import requests
 import os
-import time
 import logging
-import threading
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger()
@@ -12,10 +10,6 @@ app = Flask(__name__)
 
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
-DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')  # Добавим токен Discord
-
-# ID канала #стоки-гроу (нужно получить)
-DISCORD_CHANNEL_ID = "ВАШ_ID_КАНАЛА_СТОКИ_ГРОУ"
 
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -26,56 +20,29 @@ def send_telegram(text):
     except Exception as e:
         logger.error(f"❌ Ошибка Telegram: {e}")
 
-def check_discord_channel():
-    """Проверяет сообщения в канале Discord"""
+@app.route('/webhook', methods=['POST'])
+def discord_webhook():
+    """Получает сообщения от Discord вебхука"""
     try:
-        url = f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages"
-        headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
+        data = request.json
         
-        response = requests.get(url, headers=headers)
-        if response.status_code == 200:
-            messages = response.json()
-            # Берем последнее сообщение
-            if messages and 'Tomato' in messages[0]['content']:
-                return True, messages[0]['content']
-        return False, None
+        # Проверяем что это сообщение о стоке
+        if data.get('content') and 'Tomato' in data['content']:
+            logger.info("🍅 TOMATO ОБНАРУЖЕН ЧЕРЕЗ ВЕБХУК!")
+            send_telegram("🍅 TOMATO В ПРОДАЖЕ! 🍅")
+            send_telegram(f"📋 {data['content']}")
+        
+        return 'OK'
     except Exception as e:
-        logger.error(f"❌ Ошибка проверки Discord: {e}")
-        return False, None
-
-def discord_monitor():
-    """Мониторит канал Discord"""
-    logger.info("🔍 Начинаю мониторинг канала #стоки-гроу...")
-    send_telegram("🔍 Начинаю мониторинг стока! Ожидаю Tomato...")
-    
-    last_detected = False
-    
-    while True:
-        try:
-            found, message = check_discord_channel()
-            
-            if found and not last_detected:
-                logger.info("🍅 TOMATO ОБНАРУЖЕН!")
-                send_telegram("🍅 TOMATO В ПРОДАЖЕ! 🍅")
-                send_telegram(f"📋 Актуальный сток:\n{message}")
-                last_detected = True
-            elif not found:
-                last_detected = False
-                
-        except Exception as e:
-            logger.error(f"❌ Ошибка мониторинга: {e}")
-            
-        time.sleep(60)  # Проверяем каждую минуту
+        logger.error(f"❌ Ошибка вебхука: {e}")
+        return 'ERROR'
 
 @app.route('/')
 def home():
-    return "🍅 Мониторю канал #стоки-гроу на предмет Tomato"
+    return "🎯 Готов принимать вебхуки от Discord"
 
-# Запускаем монитор
-logger.info("🚀 Запускаю Discord монитор...")
-monitor_thread = threading.Thread(target=discord_monitor)
-monitor_thread.daemon = True
-monitor_thread.start()
+logger.info("🚀 Сервер вебхука запущен")
+send_telegram("🔍 Система готова к приему вебхуков!")
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
