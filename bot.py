@@ -10,7 +10,7 @@ app = Flask(__name__)
 
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
-DISCORD_WEBHOOK_URL = "ВАШ_URL_ВЕБХУКА"  # Вставьте сюда URL вебхука
+DISCORD_WEBHOOK_URL = os.getenv('DISCORD_WEBHOOK_URL')  # Безопасно!
 
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -30,6 +30,7 @@ def send_discord_test():
         response = requests.post(DISCORD_WEBHOOK_URL, json=data)
         if response.status_code == 204:
             logger.info("✅ Тестовое сообщение отправлено в Discord")
+            send_telegram("✅ Вебхук работает! Сообщение отправлено в Discord")
         else:
             logger.error(f"❌ Ошибка Discord: {response.status_code}")
     except Exception as e:
