@@ -25,28 +25,30 @@ def send_telegram(text):
         logger.error(f"❌ Ошибка Telegram: {e}")
 
 def check_discord_connection():
-    """Проверяет подключение к Discord API"""
+    """Проверяет подключение к Discord API и ищет Tomato"""
     try:
-        logger.info("🔄 Проверяю подключение к Discord...")
-        logger.info(f"📝 Токен: {DISCORD_TOKEN[:10]}...")  # Только первые 10 символов
-        logger.info(f"📝 ID канала: {DISCORD_CHANNEL_ID}")
-        
         url = f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages"
         headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
         
         response = requests.get(url, headers=headers)
-        logger.info(f"📡 Статус ответа Discord: {response.status_code}")
         
         if response.status_code == 200:
             messages = response.json()
-            logger.info(f"📨 Получено сообщений: {len(messages)}")
-            return True, messages[0]['content'] if messages else "Канал пуст"
+            
+            # Проверяем ВСЕ сообщения на наличие Tomato
+            for message in messages:
+                if ':Tomato:' in message['content']:
+                    logger.info(f"🍅 TOMATO НАЙДЕН В СООБЩЕНИИ!")
+                    return True, message['content']
+            
+            logger.info("❌ Tomato не найден в последних сообщениях")
+            return False, None
         else:
-            logger.error(f"❌ Ошибка Discord API: {response.status_code} - {response.text}")
+            logger.error(f"❌ Ошибка Discord API: {response.status_code}")
             return False, None
             
     except Exception as e:
-        logger.error(f"❌ Критическая ошибка подключения: {e}")
+        logger.error(f"❌ Ошибка подключения: {e}")
         return False, None
 
 def discord_monitor():
@@ -70,7 +72,7 @@ def discord_monitor():
         try:
             found, message = check_discord_connection()
             
-            if found and 'Tomato' in str(message) and not last_detected:
+            if found and not last_detected:
                 logger.info("🍅 TOMATO ОБНАРУЖЕН!")
                 send_telegram("🍅 TOMATO В ПРОДАЖЕ! 🍅")
                 send_telegram(f"📋 {message}")
