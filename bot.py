@@ -18,9 +18,7 @@ DISCORD_CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')
 
 # Храним ID последнего обработанного сообщения
 last_processed_message_id = None
-# Время последнего уведомления
 last_notification_time = None
-# Короткий интервал между уведомлениями (4.5 минуты) чтобы ловить каждый сток
 NOTIFICATION_COOLDOWN = timedelta(minutes=4, seconds=30)
 
 def send_telegram(text):
@@ -34,6 +32,15 @@ def send_telegram(text):
     except Exception as e:
         logger.error(f"❌ Ошибка Telegram: {e}")
         return False
+
+def self_ping():
+    """Само-пинг чтобы Render не засыпал"""
+    try:
+        # Пингуем сам себя
+        requests.get(f"https://stock-bot-cj4s.onrender.com/", timeout=5)
+        logger.info("🔄 Self-ping выполнен")
+    except Exception as e:
+        logger.error(f"❌ Ошибка self-ping: {e}")
 
 def check_discord_messages():
     """Проверяет самое последнее сообщение в канале Discord"""
@@ -76,7 +83,7 @@ def check_discord_messages():
                     
                     current_time = datetime.now()
                     
-                    # Проверяем кулдаун (логируем оставшееся время)
+                    # Проверяем кулдаун
                     if last_notification_time:
                         time_passed = current_time - last_notification_time
                         time_left = NOTIFICATION_COOLDOWN - time_passed
@@ -85,7 +92,6 @@ def check_discord_messages():
                             minutes_left = int(time_left.total_seconds() / 60)
                             seconds_left = int(time_left.total_seconds() % 60)
                             logger.info(f"⏳ Кулдаун активен: {minutes_left}м {seconds_left}с осталось")
-                            # Но все равно отмечаем сообщение как обработанное
                             last_processed_message_id = message_id
                             return False, f"Кулдаун: {minutes_left}м {seconds_left}с", message_id
                     
@@ -125,6 +131,7 @@ def home():
     <p>Бот работает и мониторит канал Discord!</p>
     <p>Последнее сообщение: <b id="lastMsg">Загрузка...</b></p>
     <p>Статус кулдауна: <b id="cooldownStatus">Загрузка...</b></p>
+    <p>Статус сервера: <b id="serverStatus">✅ Активен</b></p>
     <p><a href="/check">🔍 Проверить сейчас</a></p>
     <p><a href="/reset">🔄 Сбросить кулдаун</a></p>
     <script>
@@ -135,7 +142,7 @@ def home():
             });
         }
         updateStatus();
-        setInterval(updateStatus, 2000);
+        setInterval(updateStatus, 5000);
     </script>
     """
 
@@ -161,7 +168,8 @@ def get_status():
     return {
         'last_message': last_processed_message_id or "Нет сообщений",
         'cooldown_status': cooldown_status,
-        'cooldown_minutes': NOTIFICATION_COOLDOWN.total_seconds() / 60
+        'server_time': current_time.strftime('%H:%M:%S'),
+        'status': 'active'
     }
 
 @app.route('/check')
@@ -196,9 +204,24 @@ def reset_cooldown():
     <p><a href="/">← Назад</a></p>
     """
 
+@app.route('/health')
+def health_check():
+    """Эндпоинт для проверки здоровья"""
+    return {'status': 'ok', 'timestamp': datetime.now().isoformat()}
+
+def uptime_monitor():
+    """Поддерживает сервер активным"""
+    while True:
+        try:
+            self_ping()
+            time.sleep(600)  # Пинг каждые 10 минут
+        except Exception as e:
+            logger.error(f"❌ Ошибка uptime monitor: {e}")
+            time.sleep(60)
+
 def discord_monitor():
     """Основной мониторинг"""
-    logger.info("🔄 ЗАПУСК МОНИТОРИНГА С КОРОТКИМ КУЛДАУНОМ")
+    logger.info("🔄 ЗАПУСК МОНИТОРИНГА С UPTIME-MONITOR")
     
     while True:
         try:
@@ -222,14 +245,19 @@ def discord_monitor():
 
 # Запускаем приложение
 if __name__ == '__main__':
-    logger.info("🚀 ЗАПУСК СИСТЕМЫ С КОРОТКИМ КУЛДАУНОМ (4.5 минуты)")
+    logger.info("🚀 ЗАПУСК СИСТЕМЫ С UPTIME-MONITOR")
     
     # Запускаем мониторинг в отдельном потоке
     monitor_thread = threading.Thread(target=discord_monitor)
     monitor_thread.daemon = True
     monitor_thread.start()
     
+    # Запускаем uptime-monitor в отдельном потоке
+    uptime_thread = threading.Thread(target=uptime_monitor)
+    uptime_thread.daemon = True
+    uptime_thread.start()
+    
     # Отправляем уведомление о запуске
-    send_telegram("🔍 Бот перезапущен! Мониторинг Tomato с кулдауном 4.5 минуты...")
+    send_telegram("🔍 Бот перезапущен! Мониторинг Tomato 24/7...")
     
     app.run(host='0.0.0.0', port=5000)
