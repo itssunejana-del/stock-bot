@@ -4,8 +4,6 @@ import os
 import time
 import logging
 import threading
-import discord
-from discord.ext import tasks
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger()
@@ -15,11 +13,7 @@ app = Flask(__name__)
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
-
-# Discord клиент
-intents = discord.Intents.default()
-intents.message_content = True
-client = discord.Client(intents=intents)
+DISCORD_CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')  # Безопасно через переменную!
 
 def send_telegram(text):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
@@ -30,36 +24,56 @@ def send_telegram(text):
     except Exception as e:
         logger.error(f"❌ Ошибка Telegram: {e}")
 
-@client.event
-async def on_ready():
-    logger.info(f'✅ Discord бот вошел как {client.user}')
-    send_telegram("🔍 Discord бот подключен! Мониторю сообщения...")
+def check_discord_channel():
+    """Проверяет сообщения в канале через Discord API"""
+    try:
+        url = f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages"
+        headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
+        
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            messages = response.json()
+            # Проверяем последнее сообщение
+            if messages and 'Tomato' in messages[0]['content']:
+                return True, messages[0]['content']
+        return False, None
+    except Exception as e:
+        logger.error(f"❌ Ошибка проверки Discord: {e}")
+        return False, None
 
-@client.event
-async def on_message(message):
-    # Игнорируем сообщения от самого себя
-    if message.author == client.user:
-        return
+def discord_monitor():
+    """Мониторит канал Discord"""
+    logger.info("🔍 Начинаю мониторинг канала...")
+    send_telegram("🔍 Discord мониторинг запущен! Ожидаю Tomato...")
     
-    # Проверяем что сообщение от Vulcan bot и содержит Tomato
-    if 'Vulcan' in str(message.author) and 'Tomato' in message.content:
-        logger.info("🍅 TOMATO ОБНАРУЖЕН!")
-        send_telegram("🍅 TOMATO В ПРОДАЖЕ! 🍅")
-        send_telegram(f"📋 {message.content}")
-
-def start_discord_bot():
-    """Запускает Discord бота в отдельном потоке"""
-    client.run(DISCORD_TOKEN)
+    last_detected = False
+    
+    while True:
+        try:
+            found, message = check_discord_channel()
+            
+            if found and not last_detected:
+                logger.info("🍅 TOMATO ОБНАРУЖЕН!")
+                send_telegram("🍅 TOMATO В ПРОДАЖЕ! 🍅")
+                send_telegram(f"📋 {message}")
+                last_detected = True
+            elif not found:
+                last_detected = False
+                
+        except Exception as e:
+            logger.error(f"❌ Ошибка мониторинга: {e}")
+            
+        time.sleep(30)  # Проверяем каждые 30 секунд
 
 @app.route('/')
 def home():
-    return "🍅 Мониторю сообщения Vulcan bot на предмет Tomato"
+    return "🍅 Мониторю канал на предмет Tomato"
 
-# Запускаем Discord бота
+# Запускаем монитор
 logger.info("🚀 Запускаю Discord монитор...")
-discord_thread = threading.Thread(target=start_discord_bot)
-discord_thread.daemon = True
-discord_thread.start()
+monitor_thread = threading.Thread(target=discord_monitor)
+monitor_thread.daemon = True
+monitor_thread.start()
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
