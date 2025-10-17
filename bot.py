@@ -16,248 +16,179 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 DISCORD_CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')
 
-# Храним ID последнего обработанного сообщения
-last_processed_message_id = None
+# Переменные для работы
+last_processed_messages = set()
 last_notification_time = None
-NOTIFICATION_COOLDOWN = timedelta(minutes=4, seconds=30)
+MAX_MESSAGE_AGE = 900  # 15 минут
+MESSAGE_LIMIT = 200
 
 def send_telegram(text):
-    """Отправляет сообщение в Telegram"""
+    """Отправляет КОРОТКОЕ сообщение в Telegram"""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         data = {"chat_id": TELEGRAM_CHAT_ID, "text": text}
         response = requests.post(url, data=data, timeout=10)
-        logger.info(f"📱 Telegram отправлено: {response.status_code}")
-        return True
-    except Exception as e:
-        logger.error(f"❌ Ошибка Telegram: {e}")
+        
+        if response.status_code == 200:
+            logger.info(f"📱 Отправлено: {text}")
+            return True
+        else:
+            logger.error(f"❌ Ошибка Telegram")
+            return False
+    except:
+        logger.error(f"❌ Ошибка подключения")
         return False
 
 def self_ping():
     """Само-пинг чтобы Render не засыпал"""
     try:
-        # Пингуем сам себя
         requests.get(f"https://stock-bot-cj4s.onrender.com/", timeout=5)
-        logger.info("🔄 Self-ping выполнен")
-    except Exception as e:
-        logger.error(f"❌ Ошибка self-ping: {e}")
+    except:
+        pass
+
+def cleanup_old_messages():
+    """Очищает старые сообщения из памяти"""
+    global last_processed_messages
+    if len(last_processed_messages) > 1000:
+        last_processed_messages = set(list(last_processed_messages)[-500:])
+        logger.info("🧹 Очистил старые сообщения")
 
 def check_discord_messages():
-    """Проверяет самое последнее сообщение в канале Discord"""
-    global last_processed_message_id, last_notification_time
+    """Проверяет ВСЕ сообщения за последние 15 минут"""
+    global last_processed_messages, last_notification_time
     
     try:
-        url = f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages?limit=1"
+        url = f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages?limit={MESSAGE_LIMIT}"
         headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
         
-        response = requests.get(url, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, timeout=15)
         
         if response.status_code == 200:
             messages = response.json()
+            current_time = datetime.now()
+            found_plants = []
             
-            if not messages:
-                return False, "Нет сообщений в канале", None
+            # Список семян для мониторинга
+            plants_to_monitor = [
+                # Текущие
+                'Tomato', ':Tomato:',
+                'Bamboo', ':Bamboo:',
+                # Новые редкие семена
+                'Great Pumpkin', ':GreatPumpkin:',
+                'Romanesco', ':Romanesco:',
+                'Crimson Thorn', ':CrimsonThorn:',
+            ]
             
-            message = messages[0]
-            message_id = message['id']
-            author = message['author']['username']
-            
-            # Пропускаем если это сообщение уже обрабатывали
-            if message_id == last_processed_message_id:
-                return False, "Сообщение уже обработано", message_id
-            
-            # Проверяем эмбады на наличие Tomato
-            embeds = message.get('embeds', [])
-            for embed in embeds:
-                # Собираем весь текст из эмбада
-                all_embed_text = ""
+            for message in messages:
+                message_id = message['id']
                 
-                for field in embed.get('fields', []):
-                    all_embed_text += f" {field.get('name', '')} {field.get('value', '')}"
+                # Проверяем время сообщения
+                message_time = datetime.fromisoformat(message['timestamp'].replace('Z', '+00:00'))
+                time_diff = (current_time - message_time).total_seconds()
                 
-                all_embed_text += f" {embed.get('description', '')} {embed.get('title', '')}"
+                if time_diff > MAX_MESSAGE_AGE:
+                    continue
                 
-                # Ищем Tomato в любом виде
-                if any(tomato_keyword in all_embed_text for tomato_keyword in ['Tomato', ':Tomato:', '🍅']):
-                    logger.info(f"🎯 НОВЫЙ TOMATO НАЙДЕН В СООБЩЕНИИ {message_id}!")
-                    
-                    current_time = datetime.now()
-                    
-                    # Проверяем кулдаун
-                    if last_notification_time:
-                        time_passed = current_time - last_notification_time
-                        time_left = NOTIFICATION_COOLDOWN - time_passed
-                        
-                        if time_left.total_seconds() > 0:
-                            minutes_left = int(time_left.total_seconds() / 60)
-                            seconds_left = int(time_left.total_seconds() % 60)
-                            logger.info(f"⏳ Кулдаун активен: {minutes_left}м {seconds_left}с осталось")
-                            last_processed_message_id = message_id
-                            return False, f"Кулдаун: {minutes_left}м {seconds_left}с", message_id
-                    
-                    # Формируем сообщение для Telegram
-                    telegram_message = f"🚨 TOMATO В ПРОДАЖЕ! 🍅\n\n"
+                if message_id in last_processed_messages:
+                    continue
+                
+                last_processed_messages.add(message_id)
+                
+                # Проверяем эмбады
+                embeds = message.get('embeds', [])
+                for embed in embeds:
+                    all_embed_text = ""
                     
                     for field in embed.get('fields', []):
-                        field_name = field.get('name', '')
-                        field_value = field.get('value', '')
-                        if field_name and field_value:
-                            telegram_message += f"• {field_name}: {field_value}\n"
+                        all_embed_text += f" {field.get('name', '')} {field.get('value', '')}"
                     
-                    # Обновляем время последнего уведомления и ID сообщения
-                    last_notification_time = current_time
-                    last_processed_message_id = message_id
+                    all_embed_text += f" {embed.get('description', '')} {embed.get('title', '')}"
                     
-                    logger.info(f"✅ Уведомление будет отправлено для {message_id}")
-                    
-                    return True, telegram_message, message_id
+                    # Ищем растения в тексте
+                    for plant in plants_to_monitor:
+                        if plant in all_embed_text:
+                            plant_name = clean_plant_name(plant)
+                            if plant_name not in found_plants:
+                                found_plants.append(plant_name)
+                                logger.info(f"🎯 НАЙДЕНО: {plant_name}")
             
-            # Если Tomato не найден, все равно отмечаем сообщение как обработанное
-            last_processed_message_id = message_id
-            return False, "Tomato не найден в последнем сообщении", message_id
+            # Отправляем уведомления
+            if found_plants:
+                current_time = datetime.now()
+                
+                # Кулдаун 4.5 минуты
+                if last_notification_time:
+                    time_passed = current_time - last_notification_time
+                    if time_passed.total_seconds() < 270:
+                        logger.info("⏳ Кулдаун активен, пропускаем")
+                        return False
+                
+                # Отправляем уведомление для каждого растения
+                for plant in found_plants:
+                    send_telegram(f"{plant} в стоке")
+                
+                last_notification_time = current_time
+                return True
+            
+            return False
             
         else:
             logger.error(f"❌ Ошибка Discord API: {response.status_code}")
-            return False, f"Ошибка API: {response.status_code}", None
+            return False
             
     except Exception as e:
-        logger.error(f"💥 Ошибка при проверке сообщений: {e}")
-        return False, f"Ошибка: {str(e)}", None
+        logger.error(f"💥 Ошибка при проверке: {e}")
+        return False
+
+def clean_plant_name(plant):
+    """Очищает название растения"""
+    clean_name = plant.replace(':', '')
+    
+    # Русские названия для удобства
+    name_mapping = {
+        'Tomato': 'Томат',
+        'Bamboo': 'Бамбук',
+        'Great Pumpkin': 'Великая Тыква',
+        'Romanesco': 'Романеско',
+        'Crimson Thorn': 'Багровая Колючка'
+    }
+    
+    return name_mapping.get(clean_name, clean_name)
 
 @app.route('/')
 def home():
-    return """
-    <h1>🍅 Tomato Monitor Bot</h1>
-    <p>Бот работает и мониторит канал Discord!</p>
-    <p>Последнее сообщение: <b id="lastMsg">Загрузка...</b></p>
-    <p>Статус кулдауна: <b id="cooldownStatus">Загрузка...</b></p>
-    <p>Статус сервера: <b id="serverStatus">✅ Активен</b></p>
-    <p><a href="/check">🔍 Проверить сейчас</a></p>
-    <p><a href="/reset">🔄 Сбросить кулдаун</a></p>
-    <script>
-        function updateStatus() {
-            fetch('/status').then(r => r.json()).then(data => {
-                document.getElementById('lastMsg').textContent = data.last_message || 'Нет сообщений';
-                document.getElementById('cooldownStatus').textContent = data.cooldown_status;
-            });
-        }
-        updateStatus();
-        setInterval(updateStatus, 5000);
-    </script>
-    """
-
-@app.route('/status')
-def get_status():
-    """Возвращает статус системы"""
-    global last_processed_message_id, last_notification_time
-    
-    current_time = datetime.now()
-    cooldown_status = "✅ Готов к отправке"
-    
-    if last_notification_time:
-        time_passed = current_time - last_notification_time
-        time_left = NOTIFICATION_COOLDOWN - time_passed
-        
-        if time_left.total_seconds() > 0:
-            minutes_left = int(time_left.total_seconds() / 60)
-            seconds_left = int(time_left.total_seconds() % 60)
-            cooldown_status = f"⏳ Кулдаун: {minutes_left}м {seconds_left}с"
-        else:
-            cooldown_status = "✅ Готов к отправке"
-    
-    return {
-        'last_message': last_processed_message_id or "Нет сообщений",
-        'cooldown_status': cooldown_status,
-        'server_time': current_time.strftime('%H:%M:%S'),
-        'status': 'active'
-    }
-
-@app.route('/check')
-def check_messages():
-    """Проверяет сообщения"""
-    found, message, msg_id = check_discord_messages()
-    
-    result = "🍅 TOMATO НАЙДЕН!" if found else "❌ Tomato не найден"
-    
-    if found:
-        success = send_telegram(message)
-        result += " ✅ Уведомление отправлено!" if success else " ❌ Ошибка отправки"
-    
-    status = get_status()
-    
-    return f"""
-    <h1>Результат проверки</h1>
-    <p>Результат: <b>{result}</b></p>
-    <p>ID сообщения: {msg_id or 'Нет'}</p>
-    <p>Статус кулдауна: {status['cooldown_status']}</p>
-    <p><a href="/">← Назад</a></p>
-    """
-
-@app.route('/reset')
-def reset_cooldown():
-    """Сбрасывает кулдаун"""
-    global last_notification_time
-    last_notification_time = None
-    return """
-    <h1>🔄 Кулдаун сброшен!</h1>
-    <p>Бот отправит уведомление при следующем обнаружении Tomato.</p>
-    <p><a href="/">← Назад</a></p>
-    """
-
-@app.route('/health')
-def health_check():
-    """Эндпоинт для проверки здоровья"""
-    return {'status': 'ok', 'timestamp': datetime.now().isoformat()}
+    return "🍅 Мониторю 5 видов семян (15-минутное окно)..."
 
 def uptime_monitor():
     """Поддерживает сервер активным"""
     while True:
-        try:
-            self_ping()
-            time.sleep(600)  # Пинг каждые 10 минут
-        except Exception as e:
-            logger.error(f"❌ Ошибка uptime monitor: {e}")
-            time.sleep(60)
+        self_ping()
+        time.sleep(600)
 
 def discord_monitor():
     """Основной мониторинг"""
-    logger.info("🔄 ЗАПУСК МОНИТОРИНГА С UPTIME-MONITOR")
+    logger.info("🔄 МОНИТОРЮ 5 СЕМЯН: Томат, Бамбук, Великая Тыква, Романеско, Багровая Колючка")
     
     while True:
         try:
-            found, message, message_id = check_discord_messages()
+            found = check_discord_messages()
             
             if found:
-                logger.info(f"🎯 ОТПРАВЛЯЮ УВЕДОМЛЕНИЕ ДЛЯ СООБЩЕНИЯ {message_id}!")
-                success = send_telegram(message)
-                if success:
-                    logger.info("✅ Уведомление успешно отправлено в Telegram!")
-                else:
-                    logger.error("❌ Не удалось отправить уведомление в Telegram")
+                logger.info("✅ Уведомления отправлены")
             else:
-                logger.info("🔍 Новых сообщений с Tomato нет")
+                logger.info("🔍 Новых семян нет")
                 
-            time.sleep(10)  # Проверяем каждые 10 секунд
+            cleanup_old_messages()
+            time.sleep(10)
             
         except Exception as e:
             logger.error(f"❌ Ошибка мониторинга: {e}")
             time.sleep(30)
 
-# Запускаем приложение
 if __name__ == '__main__':
-    logger.info("🚀 ЗАПУСК СИСТЕМЫ С UPTIME-MONITOR")
+    logger.info("🚀 ЗАПУСК С МОНИТОРИНГОМ 5 СЕМЯН")
     
-    # Запускаем мониторинг в отдельном потоке
-    monitor_thread = threading.Thread(target=discord_monitor)
-    monitor_thread.daemon = True
-    monitor_thread.start()
-    
-    # Запускаем uptime-monitor в отдельном потоке
-    uptime_thread = threading.Thread(target=uptime_monitor)
-    uptime_thread.daemon = True
-    uptime_thread.start()
-    
-    # Отправляем уведомление о запуске
-    send_telegram("🔍 Бот перезапущен! Мониторинг Tomato 24/7...")
+    threading.Thread(target=discord_monitor, daemon=True).start()
+    threading.Thread(target=uptime_monitor, daemon=True).start()
     
     app.run(host='0.0.0.0', port=5000)
