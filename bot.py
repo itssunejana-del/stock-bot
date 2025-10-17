@@ -16,11 +16,9 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 DISCORD_CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')
 
-# Переменные для работы
-last_processed_messages = set()
+# Простые переменные
+last_processed_message_id = None
 last_notification_time = None
-MAX_MESSAGE_AGE = 900  # 15 минут
-MESSAGE_LIMIT = 200
 
 def send_telegram(text):
     """Отправляет КОРОТКОЕ сообщение в Telegram"""
@@ -33,162 +31,136 @@ def send_telegram(text):
             logger.info(f"📱 Отправлено: {text}")
             return True
         else:
-            logger.error(f"❌ Ошибка Telegram")
+            logger.error(f"❌ Ошибка Telegram: {response.status_code}")
             return False
-    except:
-        logger.error(f"❌ Ошибка подключения")
+    except Exception as e:
+        logger.error(f"❌ Ошибка Telegram: {e}")
         return False
 
-def self_ping():
-    """Само-пинг чтобы Render не засыпал"""
-    try:
-        requests.get(f"https://stock-bot-cj4s.onrender.com/", timeout=5)
-    except:
-        pass
-
-def cleanup_old_messages():
-    """Очищает старые сообщения из памяти"""
-    global last_processed_messages
-    if len(last_processed_messages) > 1000:
-        last_processed_messages = set(list(last_processed_messages)[-500:])
-        logger.info("🧹 Очистил старые сообщения")
-
 def check_discord_messages():
-    """Проверяет ВСЕ сообщения за последние 15 минут"""
-    global last_processed_messages, last_notification_time
+    """Проверяет последнее сообщение в канале"""
+    global last_processed_message_id, last_notification_time
     
     try:
-        url = f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages?limit={MESSAGE_LIMIT}"
+        # Проверяем только 1 последнее сообщение
+        url = f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages?limit=1"
         headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
         
-        response = requests.get(url, headers=headers, timeout=15)
+        logger.info(f"🔍 Проверяю канал {DISCORD_CHANNEL_ID}...")
+        response = requests.get(url, headers=headers, timeout=10)
         
         if response.status_code == 200:
             messages = response.json()
-            current_time = datetime.now()
-            found_plants = []
             
-            # Список семян для мониторинга
-            plants_to_monitor = [
-                # Текущие
-                'Tomato', ':Tomato:',
-                'Bamboo', ':Bamboo:',
-                # Новые редкие семена
-                'Great Pumpkin', ':GreatPumpkin:',
-                'Romanesco', ':Romanesco:',
-                'Crimson Thorn', ':CrimsonThorn:',
-            ]
+            if not messages:
+                return False, "Нет сообщений", None
             
-            for message in messages:
-                message_id = message['id']
+            message = messages[0]
+            message_id = message['id']
+            author = message['author']['username']
+            
+            logger.info(f"📨 Последнее сообщение от {author}: {message_id}")
+            
+            # Пропускаем если уже обрабатывали
+            if message_id == last_processed_message_id:
+                return False, "Уже обработано", message_id
+            
+            # Проверяем эмбады
+            embeds = message.get('embeds', [])
+            for embed in embeds:
+                all_embed_text = ""
                 
-                # Проверяем время сообщения
-                message_time = datetime.fromisoformat(message['timestamp'].replace('Z', '+00:00'))
-                time_diff = (current_time - message_time).total_seconds()
+                # Собираем весь текст
+                for field in embed.get('fields', []):
+                    all_embed_text += f" {field.get('name', '')} {field.get('value', '')}"
                 
-                if time_diff > MAX_MESSAGE_AGE:
-                    continue
+                all_embed_text += f" {embed.get('description', '')} {embed.get('title', '')}"
                 
-                if message_id in last_processed_messages:
-                    continue
+                logger.info(f"🔍 Текст эмбада: {all_embed_text[:100]}...")
                 
-                last_processed_messages.add(message_id)
+                # Ищем семена
+                seeds_to_monitor = [
+                    'Tomato', 'Bamboo', 
+                    'Great Pumpkin', 'Romanesco', 'Crimson Thorn'
+                ]
                 
-                # Проверяем эмбады
-                embeds = message.get('embeds', [])
-                for embed in embeds:
-                    all_embed_text = ""
+                found_seeds = []
+                for seed in seeds_to_monitor:
+                    if seed in all_embed_text:
+                        found_seeds.append(seed)
+                        logger.info(f"🎯 НАЙДЕНО: {seed}")
+                
+                if found_seeds:
+                    current_time = datetime.now()
                     
-                    for field in embed.get('fields', []):
-                        all_embed_text += f" {field.get('name', '')} {field.get('value', '')}"
+                    # Кулдаун 4.5 минуты
+                    if last_notification_time:
+                        time_passed = current_time - last_notification_time
+                        if time_passed.total_seconds() < 270:
+                            logger.info("⏳ Кулдаун активен")
+                            last_processed_message_id = message_id
+                            return False, "Кулдаун", message_id
                     
-                    all_embed_text += f" {embed.get('description', '')} {embed.get('title', '')}"
+                    # Отправляем уведомление для первого найденного семени
+                    seed_name = found_seeds[0]
+                    seed_display_name = {
+                        'Tomato': 'Томат',
+                        'Bamboo': 'Бамбук', 
+                        'Great Pumpkin': 'Великая Тыква',
+                        'Romanesco': 'Романеско',
+                        'Crimson Thorn': 'Багровая Колючка'
+                    }.get(seed_name, seed_name)
                     
-                    # Ищем растения в тексте
-                    for plant in plants_to_monitor:
-                        if plant in all_embed_text:
-                            plant_name = clean_plant_name(plant)
-                            if plant_name not in found_plants:
-                                found_plants.append(plant_name)
-                                logger.info(f"🎯 НАЙДЕНО: {plant_name}")
+                    last_notification_time = current_time
+                    last_processed_message_id = message_id
+                    
+                    return True, f"{seed_display_name} в стоке", message_id
             
-            # Отправляем уведомления
-            if found_plants:
-                current_time = datetime.now()
-                
-                # Кулдаун 4.5 минуты
-                if last_notification_time:
-                    time_passed = current_time - last_notification_time
-                    if time_passed.total_seconds() < 270:
-                        logger.info("⏳ Кулдаун активен, пропускаем")
-                        return False
-                
-                # Отправляем уведомление для каждого растения
-                for plant in found_plants:
-                    send_telegram(f"{plant} в стоке")
-                
-                last_notification_time = current_time
-                return True
-            
-            return False
+            last_processed_message_id = message_id
+            return False, "Семена не найдены", message_id
             
         else:
             logger.error(f"❌ Ошибка Discord API: {response.status_code}")
-            return False
+            return False, f"API ошибка: {response.status_code}", None
             
     except Exception as e:
-        logger.error(f"💥 Ошибка при проверке: {e}")
-        return False
-
-def clean_plant_name(plant):
-    """Очищает название растения"""
-    clean_name = plant.replace(':', '')
-    
-    # Русские названия для удобства
-    name_mapping = {
-        'Tomato': 'Томат',
-        'Bamboo': 'Бамбук',
-        'Great Pumpkin': 'Великая Тыква',
-        'Romanesco': 'Романеско',
-        'Crimson Thorn': 'Багровая Колючка'
-    }
-    
-    return name_mapping.get(clean_name, clean_name)
+        logger.error(f"💥 Ошибка: {e}")
+        return False, f"Ошибка: {str(e)}", None
 
 @app.route('/')
 def home():
-    return "🍅 Мониторю 5 видов семян (15-минутное окно)..."
-
-def uptime_monitor():
-    """Поддерживает сервер активным"""
-    while True:
-        self_ping()
-        time.sleep(600)
+    return "🍅 Мониторю 5 семян: Томат, Бамбук, Великая Тыква, Романеско, Багровая Колючка"
 
 def discord_monitor():
     """Основной мониторинг"""
-    logger.info("🔄 МОНИТОРЮ 5 СЕМЯН: Томат, Бамбук, Великая Тыква, Романеско, Багровая Колючка")
+    logger.info("🔄 ЗАПУСК МОНИТОРИНГА 5 СЕМЯН")
     
     while True:
         try:
-            found = check_discord_messages()
+            found, message, message_id = check_discord_messages()
             
             if found:
-                logger.info("✅ Уведомления отправлены")
+                logger.info(f"🎯 ОТПРАВЛЯЮ: {message}")
+                success = send_telegram(message)
+                if success:
+                    logger.info("✅ Уведомление отправлено")
+                else:
+                    logger.error("❌ Ошибка отправки")
             else:
-                logger.info("🔍 Новых семян нет")
+                logger.info(f"🔍 {message}")
                 
-            cleanup_old_messages()
-            time.sleep(10)
+            time.sleep(10)  # Проверяем каждые 10 секунд
             
         except Exception as e:
             logger.error(f"❌ Ошибка мониторинга: {e}")
             time.sleep(30)
 
 if __name__ == '__main__':
-    logger.info("🚀 ЗАПУСК С МОНИТОРИНГОМ 5 СЕМЯН")
+    logger.info("🚀 ЗАПУСК ПРОСТОЙ СИСТЕМЫ")
     
-    threading.Thread(target=discord_monitor, daemon=True).start()
-    threading.Thread(target=uptime_monitor, daemon=True).start()
+    # Запускаем мониторинг
+    monitor_thread = threading.Thread(target=discord_monitor)
+    monitor_thread.daemon = True
+    monitor_thread.start()
     
     app.run(host='0.0.0.0', port=5000)
