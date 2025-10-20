@@ -16,8 +16,9 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 DISCORD_CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')
 
-# Храним ID последнего проверенного сообщения
-last_checked_id = None
+# Храним время последнего сообщения вместо ID
+last_message_time = None
+processed_messages = set()
 
 def send_telegram(text):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
@@ -32,8 +33,10 @@ def send_telegram(text):
             logger.info(f"📱 Отправлено: {text}")
             return True
         else:
+            logger.error(f"❌ Ошибка Telegram: {response.status_code}")
             return False
-    except:
+    except Exception as e:
+        logger.error(f"❌ Ошибка Telegram: {e}")
         return False
 
 def get_full_message_text(message):
@@ -52,20 +55,23 @@ def get_full_message_text(message):
     
     return full_text
 
+def get_message_time(message):
+    """Получает время сообщения"""
+    timestamp = message['timestamp'].replace('Z', '+00:00')
+    return datetime.fromisoformat(timestamp)
+
 def check_discord_messages():
-    global last_checked_id
+    global last_message_time, processed_messages
     
     try:
-        url = f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages?limit=5"
+        url = f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages?limit=10"
         headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
         
         response = requests.get(url, headers=headers, timeout=10)
         
         if response.status_code == 200:
             messages = response.json()
-            
-            # Сортируем от нового к старому
-            messages.sort(key=lambda x: x['id'], reverse=True)
+            logger.info(f"📨 Получено {len(messages)} сообщений")
             
             found_tomato = False
             
@@ -77,26 +83,41 @@ def check_discord_messages():
                 if 'Vulcan' not in author:
                     continue
                 
-                # Если дошли до последнего проверенного сообщения - останавливаемся
-                if last_checked_id and message_id <= last_checked_id:
-                    break
-                
+                message_time = get_message_time(message)
                 full_text = get_full_message_text(message)
-                logger.info(f"🔍 Проверяю новое сообщение: {full_text[:80]}...")
                 
-                # Ищем ТОМАТ в новом сообщении
+                logger.info(f"🔍 Сообщение {message_id}: {full_text[:80]}...")
+                
+                # Проверяем время сообщения - только свежие (последние 10 минут)
+                current_time = datetime.now().replace(tzinfo=message_time.tzinfo)
+                time_diff = (current_time - message_time).total_seconds()
+                
+                if time_diff > 600:  # 10 минут
+                    logger.info("⏩ Пропускаем старое сообщение")
+                    continue
+                
+                # Проверяем, новое ли сообщение
+                if message_id in processed_messages:
+                    logger.info("⏩ Уже обрабатывали это сообщение")
+                    continue
+                
+                processed_messages.add(message_id)
+                
+                # Ищем ТОМАТ
                 if 'Tomato' in full_text or 'To...' in full_text:
                     logger.info("🎯 ОБНАРУЖЕН ТОМАТ В НОВОМ СООБЩЕНИИ!")
                     send_telegram("🍅 Томат в стоке!")
                     found_tomato = True
-                    break  # Нашли томат - выходим
+                    # Не прерываем цикл - может быть несколько новых сообщений
             
-            # Обновляем ID последнего проверенного сообщения
-            if messages:
-                last_checked_id = messages[0]['id']  # ID самого нового сообщения
+            # Очищаем старые сообщения из памяти
+            if len(processed_messages) > 100:
+                processed_messages = set()
+                logger.info("🧹 Очистил историю сообщений")
             
             return found_tomato
         else:
+            logger.error(f"❌ Ошибка Discord: {response.status_code}")
             return False
             
     except Exception as e:
@@ -104,55 +125,49 @@ def check_discord_messages():
         return False
 
 def monitoring_loop():
-    logger.info("🔄 УМНЫЙ мониторинг запущен (только новые сообщения)")
-    
-    # При старте запоминаем текущие сообщения как уже проверенные
-    global last_checked_id
-    try:
-        url = f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages?limit=1"
-        headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code == 200:
-            messages = response.json()
-            if messages:
-                last_checked_id = messages[0]['id']
-                logger.info(f"📝 Запомнил последнее сообщение: {last_checked_id}")
-    except:
-        pass
+    logger.info("🔄 ЗАПУСК УЛУЧШЕННОГО МОНИТОРИНГА")
     
     while True:
         try:
             found = check_discord_messages()
             if found:
                 logger.info("✅ Уведомление отправлено")
-            time.sleep(10)
-        except:
+            else:
+                logger.info("🔍 Новых томатов нет")
+            
+            time.sleep(15)  # Проверка каждые 15 секунд
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка в цикле: {e}")
             time.sleep(30)
 
 @app.route('/')
 def home():
     return """
-    <h1>🍅 УМНЫЙ мониторинг томатов</h1>
-    <p>Бот проверяет только НОВЫЕ сообщения после запуска</p>
-    <p>Не спамит уведомлениями о старых стоках</p>
-    <p>Последнее проверенное сообщение: {}</p>
-    <p><a href="/test_telegram">Тест Telegram</a> | <a href="/reset">Сбросить</a></p>
-    """.format(last_checked_id or "еще не проверял")
+    <h1>🍅 УЛУЧШЕННЫЙ мониторинг томатов</h1>
+    <p>Бот проверяет сообщения за последние 10 минут</p>
+    <p>Не зависит от ID сообщений, работает по времени</p>
+    <p>Обработано сообщений: {}</p>
+    <p><a href="/test">Тест сейчас</a> | <a href="/reset">Сбросить</a></p>
+    """.format(len(processed_messages))
 
-@app.route('/test_telegram')
-def test_telegram():
-    success = send_telegram("✅ Умный бот работает! Жду новые томаты.")
-    return f"Тест: {'✅ Отправлено' if success else '❌ Ошибка'}"
+@app.route('/test')
+def test():
+    """Принудительная проверка"""
+    result = check_discord_messages()
+    return f"Проверка: {'🎯 Томат найден!' if result else '🔍 Томатов нет'}"
 
 @app.route('/reset')
 def reset():
-    global last_checked_id
-    last_checked_id = None
-    return "✅ Сброшено! Будет проверять все сообщения как новые."
+    """Сброс истории сообщений"""
+    global processed_messages
+    processed_messages = set()
+    logger.info("🔄 Сброшена история сообщений")
+    return "✅ История сброшена! Будет проверять все сообщения как новые."
 
 # Запускаем мониторинг
 threading.Thread(target=monitoring_loop, daemon=True).start()
 
 if __name__ == '__main__':
-    logger.info("🚀 УМНЫЙ БОТ ЗАПУЩЕН - жду новые сообщения с томатами!")
+    logger.info("🚀 УЛУЧШЕННЫЙ БОТ ЗАПУЩЕН!")
     app.run(host='0.0.0.0', port=5000)
