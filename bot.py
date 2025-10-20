@@ -16,9 +16,8 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 DISCORD_CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')
 
-# Храним ВРЕМЯ последнего сообщения
-last_message_time = None
-processed_messages = set()
+# Храним ID последнего проверенного сообщения
+last_checked_id = None
 
 def send_telegram(text):
     if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
@@ -53,23 +52,22 @@ def get_full_message_text(message):
     
     return full_text
 
-def get_message_time(message):
-    """Получает время сообщения"""
-    timestamp = message['timestamp'].replace('Z', '+00:00')
-    return datetime.fromisoformat(timestamp)
-
 def check_discord_messages():
-    global last_message_time
+    global last_checked_id
     
     try:
-        url = f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages?limit=5"  # Только 5 последних
+        url = f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages?limit=5"
         headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
         
         response = requests.get(url, headers=headers, timeout=10)
         
         if response.status_code == 200:
             messages = response.json()
-            logger.info(f"🔍 Проверяю {len(messages)} сообщений")
+            
+            # Сортируем от нового к старому
+            messages.sort(key=lambda x: x['id'], reverse=True)
+            
+            found_tomato = False
             
             for message in messages:
                 message_id = message['id']
@@ -79,25 +77,25 @@ def check_discord_messages():
                 if 'Vulcan' not in author:
                     continue
                 
-                message_time = get_message_time(message)
+                # Если дошли до последнего проверенного сообщения - останавливаемся
+                if last_checked_id and message_id <= last_checked_id:
+                    break
+                
                 full_text = get_full_message_text(message)
+                logger.info(f"🔍 Проверяю новое сообщение: {full_text[:80]}...")
                 
-                logger.info(f"📄 Сообщение: {full_text[:80]}...")
-                
-                # 🔴 ВАЖНО: Проверяем только СВЕЖИЕ сообщения
-                if last_message_time and message_time <= last_message_time:
-                    continue  # Пропускаем старые сообщения
-                
-                # Обновляем время последнего сообщения
-                last_message_time = message_time
-                
-                # 🔴 ИЩЕМ ТОМАТ ТОЛЬКО В НОВЫХ СООБЩЕНИЯХ
+                # Ищем ТОМАТ в новом сообщении
                 if 'Tomato' in full_text or 'To...' in full_text:
-                    logger.info("🎯 ОБНАРУЖЕН ТОМАТ! Отправляю в Telegram...")
+                    logger.info("🎯 ОБНАРУЖЕН ТОМАТ В НОВОМ СООБЩЕНИИ!")
                     send_telegram("🍅 Томат в стоке!")
-                    return True
+                    found_tomato = True
+                    break  # Нашли томат - выходим
             
-            return False
+            # Обновляем ID последнего проверенного сообщения
+            if messages:
+                last_checked_id = messages[0]['id']  # ID самого нового сообщения
+            
+            return found_tomato
         else:
             return False
             
@@ -106,11 +104,27 @@ def check_discord_messages():
         return False
 
 def monitoring_loop():
-    logger.info("🔄 Мониторинг запущен (ищем томаты в НОВЫХ сообщениях)")
+    logger.info("🔄 УМНЫЙ мониторинг запущен (только новые сообщения)")
+    
+    # При старте запоминаем текущие сообщения как уже проверенные
+    global last_checked_id
+    try:
+        url = f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages?limit=1"
+        headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            messages = response.json()
+            if messages:
+                last_checked_id = messages[0]['id']
+                logger.info(f"📝 Запомнил последнее сообщение: {last_checked_id}")
+    except:
+        pass
     
     while True:
         try:
-            check_discord_messages()
+            found = check_discord_messages()
+            if found:
+                logger.info("✅ Уведомление отправлено")
             time.sleep(10)
         except:
             time.sleep(30)
@@ -118,11 +132,12 @@ def monitoring_loop():
 @app.route('/')
 def home():
     return """
-    <h1>🍅 Умный мониторинг томатов</h1>
-    <p>Бот проверяет только НОВЫЕ сообщения Вулкана</p>
+    <h1>🍅 УМНЫЙ мониторинг томатов</h1>
+    <p>Бот проверяет только НОВЫЕ сообщения после запуска</p>
     <p>Не спамит уведомлениями о старых стоках</p>
-    <p><a href="/test_telegram">Тест Telegram</a></p>
-    """
+    <p>Последнее проверенное сообщение: {}</p>
+    <p><a href="/test_telegram">Тест Telegram</a> | <a href="/reset">Сбросить</a></p>
+    """.format(last_checked_id or "еще не проверял")
 
 @app.route('/test_telegram')
 def test_telegram():
@@ -131,9 +146,9 @@ def test_telegram():
 
 @app.route('/reset')
 def reset():
-    global last_message_time
-    last_message_time = None
-    return "✅ Сброшено! Буду считать следующее сообщение новым."
+    global last_checked_id
+    last_checked_id = None
+    return "✅ Сброшено! Будет проверять все сообщения как новые."
 
 # Запускаем мониторинг
 threading.Thread(target=monitoring_loop, daemon=True).start()
