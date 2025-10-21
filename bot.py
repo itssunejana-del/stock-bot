@@ -16,8 +16,7 @@ TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 DISCORD_CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')
 
-# Храним время последнего сообщения вместо ID
-last_message_time = None
+# Храним ВСЕ обработанные сообщения
 processed_messages = set()
 
 def send_telegram(text):
@@ -55,16 +54,11 @@ def get_full_message_text(message):
     
     return full_text
 
-def get_message_time(message):
-    """Получает время сообщения"""
-    timestamp = message['timestamp'].replace('Z', '+00:00')
-    return datetime.fromisoformat(timestamp)
-
 def check_discord_messages():
-    global last_message_time, processed_messages
+    global processed_messages
     
     try:
-        url = f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages?limit=10"
+        url = f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages?limit=20"
         headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
         
         response = requests.get(url, headers=headers, timeout=10)
@@ -74,6 +68,7 @@ def check_discord_messages():
             logger.info(f"📨 Получено {len(messages)} сообщений")
             
             found_tomato = False
+            new_messages_count = 0
             
             for message in messages:
                 message_id = message['id']
@@ -83,36 +78,30 @@ def check_discord_messages():
                 if 'Vulcan' not in author:
                     continue
                 
-                message_time = get_message_time(message)
                 full_text = get_full_message_text(message)
-                
-                logger.info(f"🔍 Сообщение {message_id}: {full_text[:80]}...")
-                
-                # Проверяем время сообщения - только свежие (последние 10 минут)
-                current_time = datetime.now().replace(tzinfo=message_time.tzinfo)
-                time_diff = (current_time - message_time).total_seconds()
-                
-                if time_diff > 600:  # 10 минут
-                    logger.info("⏩ Пропускаем старое сообщение")
-                    continue
                 
                 # Проверяем, новое ли сообщение
                 if message_id in processed_messages:
-                    logger.info("⏩ Уже обрабатывали это сообщение")
-                    continue
+                    continue  # Уже обрабатывали
                 
+                new_messages_count += 1
                 processed_messages.add(message_id)
+                
+                logger.info(f"🆕 НОВОЕ сообщение {message_id}: {full_text[:100]}...")
                 
                 # Ищем ТОМАТ
                 if 'Tomato' in full_text or 'To...' in full_text:
                     logger.info("🎯 ОБНАРУЖЕН ТОМАТ В НОВОМ СООБЩЕНИИ!")
                     send_telegram("🍅 Томат в стоке!")
                     found_tomato = True
-                    # Не прерываем цикл - может быть несколько новых сообщений
             
-            # Очищаем старые сообщения из памяти
-            if len(processed_messages) > 100:
-                processed_messages = set()
+            logger.info(f"🔍 Найдено {new_messages_count} новых сообщений")
+            
+            # Очищаем старые сообщения из памяти (оставляем последние 200)
+            if len(processed_messages) > 200:
+                # Преобразуем в список, возьмем последние 100, и обратно в set
+                all_messages = list(processed_messages)
+                processed_messages = set(all_messages[-100:])
                 logger.info("🧹 Очистил историю сообщений")
             
             return found_tomato
@@ -125,7 +114,22 @@ def check_discord_messages():
         return False
 
 def monitoring_loop():
-    logger.info("🔄 ЗАПУСК УЛУЧШЕННОГО МОНИТОРИНГА")
+    logger.info("🔄 ЗАПУСК ПРОСТОГО И НАДЕЖНОГО МОНИТОРИНГА")
+    
+    # При старте запоминаем текущие сообщения как уже обработанные
+    global processed_messages
+    try:
+        url = f"https://discord.com/api/v10/channels/{DISCORD_CHANNEL_ID}/messages?limit=50"
+        headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
+        response = requests.get(url, headers=headers, timeout=10)
+        if response.status_code == 200:
+            messages = response.json()
+            for message in messages:
+                if 'Vulcan' in message.get('author', {}).get('username', ''):
+                    processed_messages.add(message['id'])
+            logger.info(f"📝 Запомнил {len(processed_messages)} существующих сообщений")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при инициализации: {e}")
     
     while True:
         try:
@@ -135,20 +139,20 @@ def monitoring_loop():
             else:
                 logger.info("🔍 Новых томатов нет")
             
-            time.sleep(15)  # Проверка каждые 15 секунд
+            time.sleep(30)  # Проверка каждые 30 секунд
             
         except Exception as e:
             logger.error(f"❌ Ошибка в цикле: {e}")
-            time.sleep(30)
+            time.sleep(60)
 
 @app.route('/')
 def home():
     return """
-    <h1>🍅 УЛУЧШЕННЫЙ мониторинг томатов</h1>
-    <p>Бот проверяет сообщения за последние 10 минут</p>
-    <p>Не зависит от ID сообщений, работает по времени</p>
+    <h1>🍅 ПРОСТОЙ И НАДЕЖНЫЙ мониторинг</h1>
+    <p>Бот проверяет ВСЕ новые сообщения Вулкана</p>
+    <p>Не пропускает стоки из-за временных ограничений</p>
     <p>Обработано сообщений: {}</p>
-    <p><a href="/test">Тест сейчас</a> | <a href="/reset">Сбросить</a></p>
+    <p><a href="/test">Тест сейчас</a> | <a href="/reset">Сбросить всё</a></p>
     """.format(len(processed_messages))
 
 @app.route('/test')
@@ -159,15 +163,15 @@ def test():
 
 @app.route('/reset')
 def reset():
-    """Сброс истории сообщений"""
+    """Полный сброс"""
     global processed_messages
     processed_messages = set()
-    logger.info("🔄 Сброшена история сообщений")
-    return "✅ История сброшена! Будет проверять все сообщения как новые."
+    logger.info("🔄 ПОЛНЫЙ СБРОС! Буду проверять все сообщения как новые.")
+    return "✅ Полный сброс! Бот будет проверять ВСЕ сообщения как новые."
 
 # Запускаем мониторинг
 threading.Thread(target=monitoring_loop, daemon=True).start()
 
 if __name__ == '__main__':
-    logger.info("🚀 УЛУЧШЕННЫЙ БОТ ЗАПУЩЕН!")
+    logger.info("🚀 ПРОСТОЙ И НАДЕЖНЫЙ БОТ ЗАПУЩЕН!")
     app.run(host='0.0.0.0', port=5000)
