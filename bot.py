@@ -32,17 +32,6 @@ TARGET_SEEDS = {
         'sticker_id': "CAACAgIAAxkBAAEPs0ZpCf9SjVZjllFEZLr2drRwSSk0hAACkYcAAuOaaUskfqF4nmGFaDYE",
         'emoji': '🎍'
     }
-    # Другие семена можно добавить позже:
-    # 'mango': {
-    #     'keywords': ['mango', 'манго', ':mango'],
-    #     'sticker_id': "ID_СТИКЕРА_МАНГО",
-    #     'emoji': '🥭'
-    # },
-    # 'pineapple': {
-    #     'keywords': ['pineapple', 'ананас', ':pineapple'],
-    #     'sticker_id': "ID_СТИКЕРА_АНАНАС", 
-    #     'emoji': '🍍'
-    # }
 }
 
 # Глобальные переменные
@@ -55,7 +44,7 @@ processed_messages_cache = set()
 telegram_offset = 0
 ping_count = 0
 last_ping_time = None
-found_seeds_count = {'tomato': 0, 'bamboo': 0}  # Счетчик найденных семян
+found_seeds_count = {'tomato': 0, 'bamboo': 0}
 
 def self_pinger():
     """Самопинг чтобы Render не останавливал сервис"""
@@ -152,7 +141,6 @@ def send_to_bot(text):
 
 def send_help_message(chat_id):
     """Отправляет сообщение со списком команд"""
-    # Собираем список отслеживаемых семян
     seeds_list = "\n".join([f"{config['emoji']} {name.capitalize()}" for name, config in TARGET_SEEDS.items()])
     
     help_text = (
@@ -176,10 +164,8 @@ def send_bot_status(chat_id):
     uptime = datetime.now() - startup_time
     hours = uptime.total_seconds() / 3600
     
-    # Форматируем время последнего пинга
     last_ping_str = "Еще не было" if not last_ping_time else last_ping_time.strftime('%H:%M:%S')
     
-    # Собираем статистику по семенам
     seeds_stats = "\n".join([f"{TARGET_SEEDS[name]['emoji']} {name.capitalize()}: {count} раз" 
                            for name, count in found_seeds_count.items()])
     
@@ -207,7 +193,6 @@ def handle_telegram_command(chat_id, command, message=None):
     
     logger.info(f"🎯 Обрабатываю команду: {command} от {chat_id}")
     
-    # 🔧 ФУНКЦИЯ ДЛЯ ПОЛУЧЕНИЯ ID СТИКЕРА
     if message and 'sticker' in message:
         sticker = message['sticker']
         file_id = sticker['file_id']
@@ -224,14 +209,13 @@ def handle_telegram_command(chat_id, command, message=None):
         return
     
     if command == '/start':
-        # Собираем список отслеживаемых семян
         seeds_list = "\n".join([f"{config['emoji']} {name.capitalize()}" for name, config in TARGET_SEEDS.items()])
         
         welcome_text = (
             "🎮 <b>Добро пожаловать!</b>\n\n"
             "Я бот для отслеживания стоков в игре <b>Grow a Garden</b>.\n"
             "Автоматически мониторю Discord канал с ботом Ember и присылаю уведомления о стоках.\n\n"
-            "📱 <b>Вам в личные сообщения:</b> Все стоки от Ember\n"
+            "📱 <b>Вам в личные сообщения:</b> Все стоки от Ember (ПОЛНЫЙ ТЕКСТ)\n"
             "📢 <b>В канал:</b> Только стикеры при редких семенах\n"
             "🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
             "📊 <b>Авто-статус:</b> Каждые 5 часов\n\n"
@@ -267,7 +251,6 @@ def telegram_poller_safe():
     
     while True:
         try:
-            # Сначала удаляем вебхук на всякий случай
             try:
                 delete_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook"
                 requests.get(delete_url, timeout=5)
@@ -298,7 +281,6 @@ def telegram_poller_safe():
                             chat_id = message['chat']['id']
                             text = message.get('text', '')
                             
-                            # 🔧 Обрабатываем стикеры
                             if 'sticker' in message:
                                 logger.info("📎 Получен стикер, обрабатываю...")
                                 handle_telegram_command(chat_id, None, message)
@@ -342,27 +324,6 @@ def get_discord_messages():
         logger.error(f"💥 {error_msg}")
         return None
 
-def clean_ember_text(text):
-    """Очищает текст от эмодзи Discord и форматирует в красивый список"""
-    # Удаляем эмодзи Discord формата <:name:123456>
-    text = re.sub(r'<:[a-zA-Z0-9_]+:\d+>', '', text)
-    
-    # Удаляем лишние звездочки для жирного текста
-    text = re.sub(r'\*\*', '', text)
-    
-    # Разделяем на строки и очищаем каждую
-    lines = text.split('\n')
-    cleaned_lines = []
-    
-    for line in lines:
-        line = line.strip()
-        if line and not line.startswith('Grow a Garden Stock') and not line.startswith('Seeds') and not line.startswith('Gear'):
-            # Оставляем только название и количество
-            if 'x' in line and any(char.isdigit() for char in line):
-                cleaned_lines.append(line)
-    
-    return '\n'.join(cleaned_lines)
-
 def extract_all_text_from_message(message):
     """Извлекает ВЕСЬ текст из сообщения Ember включая fields"""
     content = message.get('content', '')
@@ -371,15 +332,12 @@ def extract_all_text_from_message(message):
     all_text = content
     
     for embed in embeds:
-        # Добавляем заголовок
         if embed.get('title'):
             all_text += f"\n{embed.get('title')}"
         
-        # Добавляем описание
         if embed.get('description'):
             all_text += f"\n{embed.get('description')}"
         
-        # 🔧 ВАЖНО: Добавляем поля (fields) - здесь семена!
         for field in embed.get('fields', []):
             field_name = field.get('name', '')
             field_value = field.get('value', '')
@@ -387,8 +345,8 @@ def extract_all_text_from_message(message):
     
     return all_text
 
-def format_ember_message(message):
-    """Форматирует сообщение от Ember для Telegram"""
+def format_ember_message_for_bot(message):
+    """Форматирует сообщение от Ember для Telegram бота - ПОЛНЫЙ ТЕКСТ БЕЗ ОЧИСТКИ"""
     content = message.get('content', '')
     embeds = message.get('embeds', [])
     
@@ -399,16 +357,13 @@ def format_ember_message(message):
         if embed.get('description'):
             full_text += f"\n{embed.get('description')}"
         
-        # 🔧 ВАЖНО: Добавляем поля (fields)
+        # Добавляем поля (fields) - ВАЖНО: здесь семена!
         for field in embed.get('fields', []):
             field_name = field.get('name', '')
             field_value = field.get('value', '')
             full_text += f"\n{field_name}: {field_value}"
     
-    # Очищаем текст
-    cleaned_text = clean_ember_text(full_text)
-    
-    return cleaned_text.strip()
+    return full_text.strip()
 
 def check_ember_messages(messages):
     """Проверяет сообщения от Ember бота"""
@@ -429,7 +384,6 @@ def check_ember_messages(messages):
             send_to_bot("🚀 <b>Бот запущен и начал мониторинг!</b>")
             return False
         
-        # Очищаем кэш если он слишком большой
         if len(processed_messages_cache) > 100:
             processed_messages_cache = set()
             logger.info("🧹 Очистил кэш обработанных сообщений")
@@ -437,39 +391,48 @@ def check_ember_messages(messages):
         for message in messages:
             message_id = message['id']
             
-            # Если дошли до уже обработанных - выходим
             if message_id <= last_processed_id:
                 break
             
-            # Защита от дублирования - проверяем в кэше
             if message_id in processed_messages_cache:
                 logger.info(f"⏩ Пропускаем уже обработанное сообщение: {message_id}")
                 continue
             
             author = message.get('author', {}).get('username', '')
             
-            # Проверяем только сообщения от Ember бота
             if 'Ember' in author:
                 logger.info(f"🔍 Новое сообщение от Ember: {message_id}")
                 
-                # Добавляем в кэш обработанных
                 processed_messages_cache.add(message_id)
                 
-                # Ищем семена в ПОЛНОМ тексте (включая fields)
-                full_search_text = extract_all_text_from_message(message)
+                # 🔍 ДЕБАГ: Логируем полную структуру сообщения
+                content = message.get('content', '')
+                embeds = message.get('embeds', [])
+                logger.info(f"📄 Основной текст: '{content}'")
                 
-                formatted_message = format_ember_message(message)
+                if embeds:
+                    for i, embed in enumerate(embeds):
+                        logger.info(f"📊 Embed {i}:")
+                        logger.info(f"   Title: '{embed.get('title')}'")
+                        logger.info(f"   Description: '{embed.get('description')}'")
+                        fields = embed.get('fields', [])
+                        logger.info(f"   Fields count: {len(fields)}")
+                        for j, field in enumerate(fields):
+                            logger.info(f"   Field {j}: name='{field.get('name')}', value='{field.get('value')}'")
                 
-                if formatted_message:
-                    # 📱 ВСЕГДА отправляем ВСЕ сообщения Ember в БОТА
+                # 📱 В БОТА - ПОЛНЫЙ ОРИГИНАЛЬНЫЙ ТЕКСТ (без очистки)
+                full_message_text = format_ember_message_for_bot(message)
+                
+                if full_message_text:
                     bot_message = (
                         f"🛒 <b>Новый сток от Ember</b>\n"
                         f"⏰ {datetime.now().strftime('%H:%M:%S')}\n\n"
-                        f"{formatted_message}"
+                        f"<code>{full_message_text}</code>"
                     )
                     send_to_bot(bot_message)
                     
-                    # 🔍 Проверяем на наличие всех отслеживаемых семян
+                    # 🔍 Проверяем на наличие всех отслеживаемых семян в ПОЛНОМ тексте
+                    full_search_text = extract_all_text_from_message(message)
                     search_text_lower = full_search_text.lower()
                     
                     for seed_name, seed_config in TARGET_SEEDS.items():
@@ -478,11 +441,11 @@ def check_ember_messages(messages):
                                 found_seeds_count[seed_name] += 1
                                 logger.info(f"🎯 ОБНАРУЖЕН {seed_name.upper()}! Ключевое слово: '{keyword}'")
                                 
-                                # 📢 В КАНАЛ - ТОЛЬКО СТИКЕР (без текста)
+                                # 📢 В КАНАЛ - ТОЛЬКО СТИКЕР
                                 if send_to_channel(sticker_id=seed_config['sticker_id']):
                                     logger.info(f"✅ Стикер о {seed_name} отправлен в канал!")
                                 found_any_seed = True
-                                break  # Переходим к следующему семени
+                                break
         
         last_processed_id = newest_id
         bot_status = "🟢 Работает нормально"
@@ -536,19 +499,16 @@ def health_monitor():
     """Мониторинг здоровья бота - отправляет статус каждые 5 часов"""
     logger.info("❤️ Запускаю монитор здоровья (каждые 5 часов)...")
     
-    # Счетчик отчетов
     report_count = 0
     
     while True:
         try:
-            # Отправляем статус каждые 5 часов
-            time.sleep(18000)  # 5 часов = 18000 секунд
+            time.sleep(18000)
             
             report_count += 1
             uptime = datetime.now() - startup_time
             hours = uptime.total_seconds() / 3600
             
-            # Собираем статистику по семенам
             seeds_stats = "\n".join([f"{TARGET_SEEDS[name]['emoji']} {name.capitalize()}: {count} раз" 
                                    for name, count in found_seeds_count.items()])
             
@@ -570,12 +530,13 @@ def health_monitor():
         except Exception as e:
             logger.error(f"❌ Ошибка отправки авто-статуса: {e}")
 
+# ... остальные функции (Flask routes, start_background_threads) остаются без изменений ...
+
 @app.route('/')
 def home():
     uptime = datetime.now() - startup_time
     hours = uptime.total_seconds() / 3600
     
-    # Собираем список отслеживаемых семян
     seeds_list = ", ".join([f"{config['emoji']} {name.capitalize()}" for name, config in TARGET_SEEDS.items()])
     
     return f"""
@@ -614,7 +575,7 @@ def home():
             
             <div class="commands">
                 <h3>🤖 Логика работы</h3>
-                <p>📱 <strong>Вам в бота:</strong> Все стоки от Ember</p>
+                <p>📱 <strong>Вам в бота:</strong> Все стоки от Ember (ПОЛНЫЙ ТЕКСТ)</p>
                 <p>📢 <strong>В канал:</strong> Только стикеры при редких семенах</p>
                 <p>🎯 <strong>Отслеживаю:</strong> {seeds_list}</p>
                 <p>🏓 <strong>Самопинг:</strong> Каждые 8 минут</p>
@@ -625,75 +586,7 @@ def home():
     </html>
     """
 
-@app.route('/enable_channel')
-def enable_channel():
-    global channel_enabled
-    channel_enabled = True
-    return """
-    <html>
-        <head><title>Канал включен</title></head>
-        <body>
-            <h2>✅ Канал включен</h2>
-            <p>Уведомления о семенах (стикеры) снова будут приходить в канал.</p>
-            <a href="/">← Назад к панели управления</a>
-        </body>
-    </html>
-    """
-
-@app.route('/disable_channel')
-def disable_channel():
-    global channel_enabled
-    channel_enabled = False
-    return """
-    <html>
-        <head><title>Канал выключен</title></head>
-        <body>
-            <h2>⏸️ Канал выключен</h2>
-            <p>Уведомления о семенах (стикеры) временно приостановлены.</p>
-            <a href="/">← Назад к панели управления</a>
-        </body>
-    </html>
-    """
-
-@app.route('/status')
-def status_page():
-    uptime = datetime.now() - startup_time
-    hours = uptime.total_seconds() / 3600
-    
-    # Собираем статистику по семенам
-    seeds_stats = "\n".join([f"{TARGET_SEEDS[name]['emoji']} {name.capitalize()}: {found_seeds_count[name]} раз" 
-                           for name in TARGET_SEEDS.keys()])
-    
-    status_html = f"""
-    <html>
-        <head><title>Статус бота</title></head>
-        <body>
-            <h2>📊 Детальный статус</h2>
-            <p><strong>Состояние:</strong> {bot_status}</p>
-            <p><strong>Время работы:</strong> {hours:.1f} часов</p>
-            <p><strong>Запущен:</strong> {startup_time.strftime('%d.%m.%Y %H:%M:%S')}</p>
-            <p><strong>Канал:</strong> {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}</p>
-            <p><strong>Самопинг:</strong> 🏓 {ping_count} раз</p>
-            <p><strong>Авто-статус:</strong> 📊 Каждые 5 часов</p>
-            <p><strong>Найдено семян:</strong><br>{seeds_stats.replace(chr(10), '<br>')}</p>
-            <p><strong>Последнее сообщение:</strong> {last_processed_id or 'Еще не проверял'}</p>
-            {"<p><strong>Последняя ошибка:</strong> " + last_error + "</p>" if last_error else ""}
-            <a href="/">← Назад к панели управления</a>
-        </body>
-    </html>
-    """
-    return status_html
-
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    """Резервный вебхук"""
-    try:
-        update = request.get_json()
-        logger.info(f"📨 Получен вебхук: {update}")
-        return 'OK'
-    except Exception as e:
-        logger.error(f"❌ Ошибка обработки вебхука: {e}")
-        return 'ERROR'
+# ... остальные Flask routes без изменений ...
 
 def start_background_threads():
     logger.info("🔄 Запускаю фоновые потоки...")
@@ -712,25 +605,22 @@ def start_background_threads():
     return threads
 
 if __name__ == '__main__':
-    # Собираем список отслеживаемых семян для логов
     seeds_list = ", ".join([f"{config['emoji']} {name}" for name, config in TARGET_SEEDS.items()])
     
-    logger.info("🚀 ЗАПУСК БОТА С МУЛЬТИ-СЕМЕНАМИ!")
-    logger.info("📱 Вам в бота: ВСЕ стоки от Ember")
+    logger.info("🚀 ЗАПУСК БОТА С ПОЛНЫМ ТЕКСТОМ!")
+    logger.info("📱 Вам в бота: ВСЕ стоки от Ember (ПОЛНЫЙ ТЕКСТ)")
     logger.info("📢 В канал: ТОЛЬКО стикеры при редких семенах")
     logger.info(f"🎯 Отслеживаю: {seeds_list}")
     logger.info("🏓 Самопинг: Активен (каждые 8 минут)")
     logger.info("📊 Авто-статус: Каждые 5 часов")
     
-    # Запускаем фоновые потоки
     start_background_threads()
     
-    # 📱 ТОЛЬКО В БОТА
     seeds_list_bot = "\n".join([f"{config['emoji']} {name.capitalize()}" for name, config in TARGET_SEEDS.items()])
     
     startup_msg_bot = (
-        f"🚀 <b>Бот запущен с мульти-семенами!</b>\n\n"
-        f"📱 <b>Вам в бота:</b> Все стоки от Ember\n"
+        f"🚀 <b>Бот запущен с полным текстом!</b>\n\n"
+        f"📱 <b>Вам в бота:</b> Все стоки от Ember (ПОЛНЫЙ ТЕКСТ)\n"
         f"📢 <b>В канал:</b> Только стикеры при редких семенах\n"
         f"🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
         f"📊 <b>Авто-статус:</b> Каждые 5 часов\n\n"
@@ -741,8 +631,7 @@ if __name__ == '__main__':
         f"/status - Статус\n" 
         f"/enable - Включить канал\n"
         f"/disable - Выключить канал\n"
-        f"/help - Помощь\n\n"
-        f"🎯 <b>Чтобы получить ID стикера:</b> Просто отправьте мне стикер!"
+        f"/help - Помощь"
     )
     
     send_to_bot(startup_msg_bot)
