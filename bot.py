@@ -172,11 +172,11 @@ def handle_telegram_command(chat_id, command, message=None):
         
     elif command == '/enable':
         channel_enabled = True
-        send_telegram_message(chat_id, "✅ <b>Уведомления в канал ВКЛЮЧЕНЫ</b>\nТеперь томаты будут приходить в канал.")
+        send_telegram_message(chat_id, "✅ <b>Уведомления в канал ВКЛЮЧЕНЫ</b>\nТеперь томаты будут приходить в канал (стикер).")
         
     elif command == '/disable':
         channel_enabled = False
-        send_telegram_message(chat_id, "⏸️ <b>Уведомления в канал ВЫКЛЮЧЕНЫ</b>\nУведомления о томатах временно приостановлены.")
+        send_telegram_message(chat_id, "⏸️ <b>Уведомления в канал ВЫКЛЮЧЕНЫ</b>\nУведомления о томатах (стикеры) временно приостановлены.")
         
     else:
         send_telegram_message(chat_id, "❌ Неизвестная команда. Используйте /help для списка команд.")
@@ -374,29 +374,11 @@ def check_ember_messages(messages):
             if 'Ember' in author:
                 logger.info(f"🔍 Новое сообщение от Ember: {message_id}")
                 
-                # 🔍 ДЕБАГ: Логируем ВСЮ структуру сообщения
-                content = message.get('content', '')
-                embeds = message.get('embeds', [])
-                logger.info(f"📄 Основной текст: '{content}'")
-                
-                if embeds:
-                    for i, embed in enumerate(embeds):
-                        logger.info(f"📊 Embed {i}:")
-                        logger.info(f"   Title: '{embed.get('title')}'")
-                        logger.info(f"   Description: '{embed.get('description')}'")
-                        
-                        # 🔧 ВАЖНО: Логируем поля (fields)
-                        fields = embed.get('fields', [])
-                        logger.info(f"   Fields count: {len(fields)}")
-                        for j, field in enumerate(fields):
-                            logger.info(f"   Field {j}: name='{field.get('name')}', value='{field.get('value')}'")
-                
                 # Добавляем в кэш обработанных
                 processed_messages_cache.add(message_id)
                 
-                # 🔧 Ищем томаты в ПОЛНОМ тексте (включая fields)
+                # Ищем томаты в ПОЛНОМ тексте (включая fields)
                 full_search_text = extract_all_text_from_message(message)
-                logger.info(f"🔎 Полный текст для поиска: {full_search_text[:500]}...")
                 
                 formatted_message = format_ember_message(message)
                 
@@ -411,7 +393,6 @@ def check_ember_messages(messages):
                     
                     # 🔍 Проверяем на наличие томата в ПОЛНОМ тексте
                     search_text_lower = full_search_text.lower()
-                    logger.info(f"🔎 Ищу томат в тексте: {search_text_lower[:300]}...")
                     
                     tomato_keywords = ['tomato', 'томат', ':tomato']
                     found_keyword = None
@@ -424,14 +405,12 @@ def check_ember_messages(messages):
                     if found_keyword:
                         logger.info(f"🎯 ОБНАРУЖЕН ТОМАТ! Ключевое слово: '{found_keyword}'")
                         
-                        # 📢 В КАНАЛ - СТИКЕР
+                        # 📢 В КАНАЛ - ТОЛЬКО СТИКЕР (без текста)
                         tomato_sticker_id = "CAACAgIAAxkBAAEPszZpCfLc2HlDxyNpkHpQmxlBl94iwQACjYEAApqASUgobiA_uUJNkzYE"
                         
                         if send_to_channel(sticker_id=tomato_sticker_id):
                             logger.info("✅ Стикер о томате отправлен в канал!")
                         found_tomato = True
-                    else:
-                        logger.info("❌ Томат не найден в сообщении")
         
         last_processed_id = newest_id
         bot_status = "🟢 Работает нормально"
@@ -446,7 +425,174 @@ def check_ember_messages(messages):
         send_to_bot(f"🚨 <b>Ошибка в мониторинге:</b>\n<code>{error_msg}</code>")
         return False
 
-# ... остальные функции (monitor_discord, health_monitor, Flask routes) остаются без изменений ...
+def monitor_discord():
+    """Основная функция мониторинга"""
+    logger.info("🔄 Запуск мониторинга Discord...")
+    
+    error_count = 0
+    max_errors = 5
+    
+    while True:
+        try:
+            messages = get_discord_messages()
+            
+            if messages is not None:
+                found_tomato = check_ember_messages(messages)
+                
+                if found_tomato:
+                    logger.info("✅ Стикер о томате отправлен в канал!")
+                
+                error_count = 0
+            else:
+                error_count += 1
+                logger.warning(f"⚠️ Ошибка получения сообщений ({error_count}/{max_errors})")
+                
+                if error_count >= max_errors:
+                    logger.error("🚨 Слишком много ошибок, перезапуск через 5 минут...")
+                    send_to_bot("🚨 <b>ВНИМАНИЕ!</b>\nБот обнаружил проблемы с подключением к Discord.\nПерезапускаюсь через 5 минут...")
+                    time.sleep(300)
+                    error_count = 0
+            
+            time.sleep(30)
+            
+        except Exception as e:
+            logger.error(f"💥 Критическая ошибка в мониторинге: {e}")
+            send_to_bot(f"🚨 <b>Критическая ошибка!</b>\nВ мониторинге:\n<code>{e}</code>")
+            time.sleep(60)
+
+def health_monitor():
+    """Мониторинг здоровья бота"""
+    logger.info("❤️ Запускаю монитор здоровья...")
+    while True:
+        try:
+            # Отправляем статус каждые 12 часов ТОЛЬКО В БОТА
+            time.sleep(43200)  # 12 часов
+            
+            uptime = datetime.now() - startup_time
+            hours = uptime.total_seconds() / 3600
+            
+            status_report = (
+                f"📊 <b>Авто-статус</b>\n"
+                f"⏰ Работает: {hours:.1f} часов\n"
+                f"📢 Канал: {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}\n"
+                f"🔄 {bot_status}\n"
+                f"✅ Бот стабильно работает"
+            )
+            
+            send_to_bot(status_report)
+            logger.info("📊 Авто-статус отправлен в бота")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка отправки авто-статуса: {e}")
+
+@app.route('/')
+def home():
+    uptime = datetime.now() - startup_time
+    hours = uptime.total_seconds() / 3600
+    
+    return f"""
+    <html>
+        <head>
+            <title>🍅 Tomato Monitor</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 40px; }}
+                .status {{ background: #f0f8f0; padding: 20px; border-radius: 10px; }}
+                .info {{ margin: 10px 0; }}
+                .commands {{ background: #e3f2fd; padding: 20px; margin: 10px 0; border-radius: 8px; }}
+                .button {{ background: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin: 5px; }}
+                .button-disable {{ background: #f44336; }}
+            </style>
+        </head>
+        <body>
+            <h1>🍅 Умный мониторинг томатов</h1>
+            
+            <div class="status">
+                <h3>📊 Статус системы</h3>
+                <div class="info"><strong>Состояние:</strong> {bot_status}</div>
+                <div class="info"><strong>Время работы:</strong> {hours:.1f} часов</div>
+                <div class="info"><strong>Канал:</strong> {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}</div>
+                <div class="info"><strong>Последнее сообщение:</strong> {last_processed_id or 'Еще не проверял'}</div>
+            </div>
+            
+            <div class="commands">
+                <h3>🎛️ Управление</h3>
+                <a href="/enable_channel" class="button">✅ Включить канал</a>
+                <a href="/disable_channel" class="button button-disable">⏸️ Выключить канал</a>
+                <a href="/status" class="button">📊 Статус</a>
+            </div>
+            
+            <div class="commands">
+                <h3>🤖 Логика работы</h3>
+                <p>📱 <strong>Вам в бота:</strong> Все стоки от Ember</p>
+                <p>📢 <strong>В канал:</strong> Только стикер при томате</p>
+                <p>🚫 <strong>НЕТ уведомлений в канале</strong> о запуске/ошибках</p>
+            </div>
+        </body>
+    </html>
+    """
+
+@app.route('/enable_channel')
+def enable_channel():
+    global channel_enabled
+    channel_enabled = True
+    return """
+    <html>
+        <head><title>Канал включен</title></head>
+        <body>
+            <h2>✅ Канал включен</h2>
+            <p>Уведомления о томатах (стикеры) снова будут приходить в канал.</p>
+            <a href="/">← Назад к панели управления</a>
+        </body>
+    </html>
+    """
+
+@app.route('/disable_channel')
+def disable_channel():
+    global channel_enabled
+    channel_enabled = False
+    return """
+    <html>
+        <head><title>Канал выключен</title></head>
+        <body>
+            <h2>⏸️ Канал выключен</h2>
+            <p>Уведомления о томатах (стикеры) временно приостановлены.</p>
+            <a href="/">← Назад к панели управления</a>
+        </body>
+    </html>
+    """
+
+@app.route('/status')
+def status_page():
+    uptime = datetime.now() - startup_time
+    hours = uptime.total_seconds() / 3600
+    
+    status_html = f"""
+    <html>
+        <head><title>Статус бота</title></head>
+        <body>
+            <h2>📊 Детальный статус</h2>
+            <p><strong>Состояние:</strong> {bot_status}</p>
+            <p><strong>Время работы:</strong> {hours:.1f} часов</p>
+            <p><strong>Запущен:</strong> {startup_time.strftime('%d.%m.%Y %H:%M:%S')}</p>
+            <p><strong>Канал:</strong> {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}</p>
+            <p><strong>Последнее сообщение:</strong> {last_processed_id or 'Еще не проверял'}</p>
+            {"<p><strong>Последняя ошибка:</strong> " + last_error + "</p>" if last_error else ""}
+            <a href="/">← Назад к панели управления</a>
+        </body>
+    </html>
+    """
+    return status_html
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """Резервный вебхук"""
+    try:
+        update = request.get_json()
+        logger.info(f"📨 Получен вебхук: {update}")
+        return 'OK'
+    except Exception as e:
+        logger.error(f"❌ Ошибка обработки вебхука: {e}")
+        return 'ERROR'
 
 def start_background_threads():
     logger.info("🔄 Запускаю фоновые потоки...")
@@ -464,20 +610,20 @@ def start_background_threads():
     return threads
 
 if __name__ == '__main__':
-    logger.info("🚀 ЗАПУСК ИСПРАВЛЕННОГО БОТА!")
+    logger.info("🚀 ЗАПУСК БОТА СО СТИКЕРАМИ!")
     logger.info("📱 Вам в бота: ВСЕ стоки от Ember")
     logger.info("📢 В канал: ТОЛЬКО стикер при томате")
-    logger.info("🔧 ИСПРАВЛЕНИЕ: Теперь ищу томаты в fields embed'ов")
+    logger.info("🎯 Стикер ID: CAACAgIAAxkBAAEPszZpCfLc2HlDxyNpkHpQmxlBl94iwQACjYEAApqASUgobiA_uUJNkzYE")
     
     # Запускаем фоновые потоки
     start_background_threads()
     
     # 📱 ТОЛЬКО В БОТА
     startup_msg_bot = (
-        "🚀 <b>Бот запущен с исправлениями!</b>\n\n"
+        "🚀 <b>Бот запущен со стикерами!</b>\n\n"
         "📱 <b>Вам в бота:</b> Все стоки от Ember\n"
         "📢 <b>В канал:</b> Только стикер при томате\n"
-        "🔧 <b>Исправление:</b> Теперь ищу томаты в fields embed'ов\n\n"
+        "🎯 <b>Стикер настроен:</b> Ваш выбранный стикер\n\n"
         "🎛️ <b>Команды:</b>\n"
         "/start - Информация\n"
         "/status - Статус\n" 
