@@ -14,7 +14,7 @@ app = Flask(__name__)
 
 # Токены и ID
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-TELEGRAM_CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')  # ОСНОВНОЙ канал с подписчиками
+TELEGRAM_CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')
 TELEGRAM_BOT_CHAT_ID = os.getenv('TELEGRAM_BOT_CHAT_ID')
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 DISCORD_CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')
@@ -271,7 +271,6 @@ def check_ember_messages(messages):
         if last_processed_id is None:
             last_processed_id = newest_id
             logger.info(f"🚀 Первый запуск. Запомнил сообщение: {last_processed_id}")
-            # Только в бота - без канала!
             send_to_bot("🚀 <b>Бот запущен и начал мониторинг!</b>")
             return False
         
@@ -301,6 +300,14 @@ def check_ember_messages(messages):
                 # Добавляем в кэш обработанных
                 processed_messages_cache.add(message_id)
                 
+                # 🔍 ДЕБАГ: Логируем полный текст для анализа
+                content = message.get('content', '')
+                embeds = message.get('embeds', [])
+                logger.info(f"📄 Полный текст сообщения: {content}")
+                if embeds:
+                    for i, embed in enumerate(embeds):
+                        logger.info(f"📊 Embed {i}: title='{embed.get('title')}', description='{embed.get('description')}'")
+                
                 formatted_message = format_ember_message(message)
                 
                 if formatted_message:
@@ -313,7 +320,9 @@ def check_ember_messages(messages):
                     send_to_bot(bot_message)
                     
                     # 🔍 Проверяем на наличие томата (для канала)
-                    full_text = formatted_message.lower()
+                    full_text = content.lower() + " " + formatted_message.lower()
+                    logger.info(f"🔎 Проверяю текст на томаты: {full_text[:200]}...")
+                    
                     if any(tomato in full_text for tomato in ['tomato', 'томат']):
                         logger.info("🎯 ОБНАРУЖЕН ТОМАТ В СООБЩЕНИИ EMBER!")
                         
@@ -324,6 +333,8 @@ def check_ember_messages(messages):
                         if send_to_channel(channel_message):
                             logger.info("✅ Время стока с томатом отправлено в канал!")
                         found_tomato = True
+                    else:
+                        logger.info("❌ Томат не найден в сообщении")
         
         last_processed_id = newest_id
         bot_status = "🟢 Работает нормально"
@@ -335,7 +346,6 @@ def check_ember_messages(messages):
         logger.error(f"💥 {error_msg}")
         bot_status = "🔴 Ошибка обработки"
         last_error = error_msg
-        # Только в бота - без канала!
         send_to_bot(f"🚨 <b>Ошибка в мониторинге:</b>\n<code>{error_msg}</code>")
         return False
 
@@ -363,7 +373,6 @@ def monitor_discord():
                 
                 if error_count >= max_errors:
                     logger.error("🚨 Слишком много ошибок, перезапуск через 5 минут...")
-                    # Только в бота - без канала!
                     send_to_bot("🚨 <b>ВНИМАНИЕ!</b>\nБот обнаружил проблемы с подключением к Discord.\nПерезапускаюсь через 5 минут...")
                     time.sleep(300)
                     error_count = 0
@@ -372,7 +381,6 @@ def monitor_discord():
             
         except Exception as e:
             logger.error(f"💥 Критическая ошибка в мониторинге: {e}")
-            # Только в бота - без канала!
             send_to_bot(f"🚨 <b>Критическая ошибка!</b>\nВ мониторинге:\n<code>{e}</code>")
             time.sleep(60)
 
@@ -526,20 +534,20 @@ def start_background_threads():
     return threads
 
 if __name__ == '__main__':
-    logger.info("🚀 ЗАПУСК БОТА ДЛЯ ОСНОВНОГО КАНАЛА!")
+    logger.info("🚀 ЗАПУСК БОТА С ДЕБАГ-ЛОГАМИ!")
     logger.info("📱 Вам в бота: ВСЕ стоки от Ember")
     logger.info("📢 В канал: ТОЛЬКО время стока с томатом")
-    logger.info("🚫 НЕТ уведомлений в канале о запуске/ошибках")
+    logger.info("🔍 ДЕБАГ: Логирую полный текст сообщений")
     
     # Запускаем фоновые потоки
     start_background_threads()
     
     # 📱 ТОЛЬКО В БОТА - никаких сообщений в канал при запуске!
     startup_msg_bot = (
-        "🚀 <b>Бот запущен для основного канала!</b>\n\n"
+        "🚀 <b>Бот запущен с дебаг-логами!</b>\n\n"
         "📱 <b>Вам в бота:</b> Все стоки от Ember\n"
         "📢 <b>В канал:</b> Только время стока с томатом\n"
-        "🚫 <b>НЕТ уведомлений</b> в канале о запуске/ошибках\n\n"
+        "🔍 <b>Дебаг:</b> Логирую полный текст для анализа\n\n"
         "🎛️ <b>Команды:</b>\n"
         "/start - Информация\n"
         "/status - Статус\n" 
