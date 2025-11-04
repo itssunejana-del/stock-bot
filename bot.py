@@ -25,8 +25,8 @@ startup_time = datetime.now()
 channel_enabled = True
 bot_status = "🟢 Работает нормально"
 last_error = None
-# Защита от дублирования - храним обработанные сообщения
 processed_messages_cache = set()
+telegram_offset = 0  # Для отслеживания обработанных обновлений
 
 def send_telegram_message(chat_id, text, parse_mode="HTML"):
     """Отправляет сообщение в указанный чат/канал"""
@@ -133,64 +133,66 @@ def handle_telegram_command(chat_id, command):
     else:
         send_telegram_message(chat_id, "❌ Неизвестная команда. Используйте /help для списка команд.")
 
-def telegram_poller():
-    """Опрашивает Telegram API на наличие новых команд"""
-    logger.info("🔍 Запускаю Telegram поллер для обработки команд...")
-    last_update_id = 0
+def telegram_poller_safe():
+    """Безопасный опросщик Telegram с защитой от конфликтов"""
+    global telegram_offset
+    
+    logger.info("🔍 Запускаю безопасный Telegram поллер...")
     
     while True:
         try:
-            logger.info(f"🔄 Проверяю обновления Telegram (offset: {last_update_id})")
+            # Сначала удаляем вебхук на всякий случай
+            try:
+                delete_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook"
+                requests.get(delete_url, timeout=5)
+            except:
+                pass
+            
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
             params = {
-                'offset': last_update_id + 1,
-                'timeout': 10
+                'offset': telegram_offset + 1,
+                'timeout': 30,  # Увеличиваем таймаут
+                'limit': 1      # Берем по одному обновлению
             }
             
-            response = requests.get(url, params=params, timeout=15)
+            logger.info(f"🔄 Проверяю обновления (offset: {telegram_offset})")
+            response = requests.get(url, params=params, timeout=35)
             
             if response.status_code == 200:
                 data = response.json()
                 
                 if data.get('ok') and data.get('result'):
                     updates = data['result']
-                    logger.info(f"📥 Найдено обновлений: {len(updates)}")
                     
                     for update in updates:
-                        last_update_id = update['update_id']
-                        logger.info(f"🔍 Обрабатываю update_id: {last_update_id}")
+                        telegram_offset = update['update_id']
                         
                         if 'message' in update:
                             message = update['message']
                             chat_id = message['chat']['id']
                             text = message.get('text', '')
                             
-                            logger.info(f"💬 Получено сообщение: '{text}' от {chat_id}")
+                            logger.info(f"💬 Получена команда: '{text}' от {chat_id}")
                             
                             if text.startswith('/'):
                                 handle_telegram_command(chat_id, text)
                 else:
-                    logger.info("📭 Нет новых обновлений")
+                    # Нет новых обновлений - это нормально
+                    time.sleep(2)
             else:
-                logger.error(f"❌ Ошибка Telegram API: {response.status_code} - {response.text}")
+                if response.status_code == 409:
+                    logger.warning("⚠️ Конфликт с другим экземпляром. Жду 30 секунд...")
+                    time.sleep(30)  # Ждем подольше при конфликте
+                else:
+                    logger.error(f"❌ Ошибка Telegram API: {response.status_code}")
+                    time.sleep(10)
             
-            time.sleep(2)
-            
+        except requests.exceptions.Timeout:
+            # Таймаут - это нормально, продолжаем
+            continue
         except Exception as e:
             logger.error(f"💥 Ошибка в телеграм поллере: {e}")
             time.sleep(10)
-
-def setup_webhook():
-    """Удаляет вебхук если он установлен, чтобы использовать Long Polling"""
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook"
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            logger.info("✅ Вебхук удален, использую Long Polling")
-        else:
-            logger.warning(f"⚠️ Не удалось удалить вебхук: {response.text}")
-    except Exception as e:
-        logger.error(f"❌ Ошибка при удалении вебхука: {e}")
 
 def get_discord_messages():
     """Получает сообщения из Discord канала"""
@@ -494,7 +496,7 @@ def status_page():
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    """Обрабатывает вебхук от Telegram (если кто-то его настроил)"""
+    """Резервный вебхук (если кто-то настроит)"""
     try:
         update = request.get_json()
         logger.info(f"📨 Получен вебхук: {update}")
@@ -509,7 +511,7 @@ def start_background_threads():
     
     threads = [
         threading.Thread(target=monitor_discord, daemon=True),
-        threading.Thread(target=telegram_poller, daemon=True),
+        threading.Thread(target=telegram_poller_safe, daemon=True),
         threading.Thread(target=health_monitor, daemon=True)
     ]
     
@@ -520,14 +522,10 @@ def start_background_threads():
     return threads
 
 if __name__ == '__main__':
-    logger.info("🚀 ЗАПУСК УЛУЧШЕННОГО БОТА!")
+    logger.info("🚀 ЗАПУСК БЕЗОПАСНОГО БОТА!")
     logger.info("📢 Канал: Уведомления о томатах")
     logger.info("🤖 Бот: Все сообщения + управление")
-    logger.info("⌨️ Команды: /start, /status, /enable, /disable")
-    logger.info("📊 Авто-статус: каждые 12 часов")
-    
-    # Удаляем вебхук если он есть
-    setup_webhook()
+    logger.info("🛡️ Защита: Безопасный поллинг")
     
     # Запускаем фоновые потоки
     start_background_threads()
@@ -535,7 +533,7 @@ if __name__ == '__main__':
     # Отправляем сообщения о запуске
     startup_msg_channel = "🚀 <b>Мониторинг запущен!</b>\n📢 Канал активен и готов к работе"
     startup_msg_bot = (
-        "🚀 <b>Бот запущен с новыми функциями!</b>\n\n"
+        "🚀 <b>Бот запущен с безопасным режимом!</b>\n\n"
         "🎛️ <b>Доступные команды:</b>\n"
         "/start - Начать работу\n"
         "/status - Статус бота\n" 
