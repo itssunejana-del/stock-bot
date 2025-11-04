@@ -132,37 +132,63 @@ def handle_telegram_command(chat_id, command):
 
 def telegram_poller():
     """Опрашивает Telegram API на наличие новых команд"""
+    logger.info("🔍 Запускаю Telegram поллер для обработки команд...")
     last_update_id = 0
     
     while True:
         try:
+            logger.info(f"🔄 Проверяю обновления Telegram (offset: {last_update_id})")
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
             params = {
                 'offset': last_update_id + 1,
-                'timeout': 30
+                'timeout': 10
             }
             
-            response = requests.get(url, params=params, timeout=35)
+            response = requests.get(url, params=params, timeout=15)
             
             if response.status_code == 200:
                 data = response.json()
+                logger.info(f"📨 Получен ответ от Telegram: {data}")
+                
                 if data.get('ok') and data.get('result'):
-                    for update in data['result']:
+                    updates = data['result']
+                    logger.info(f"📥 Найдено обновлений: {len(updates)}")
+                    
+                    for update in updates:
                         last_update_id = update['update_id']
+                        logger.info(f"🔍 Обрабатываю update_id: {last_update_id}")
                         
                         if 'message' in update:
                             message = update['message']
                             chat_id = message['chat']['id']
                             text = message.get('text', '')
                             
+                            logger.info(f"💬 Получено сообщение: '{text}' от {chat_id}")
+                            
                             if text.startswith('/'):
                                 handle_telegram_command(chat_id, text)
+                else:
+                    logger.info("📭 Нет новых обновлений")
+            else:
+                logger.error(f"❌ Ошибка Telegram API: {response.status_code} - {response.text}")
             
-            time.sleep(1)
+            time.sleep(2)
             
         except Exception as e:
-            logger.error(f"❌ Ошибка в телеграм поллере: {e}")
+            logger.error(f"💥 Ошибка в телеграм поллере: {e}")
             time.sleep(10)
+
+def setup_webhook():
+    """Удаляет вебхук если он установлен, чтобы использовать Long Polling"""
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook"
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            logger.info("✅ Вебхук удален, использую Long Polling")
+        else:
+            logger.warning(f"⚠️ Не удалось удалить вебхук: {response.text}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка при удалении вебхука: {e}")
 
 def get_discord_messages():
     """Получает сообщения из Discord канала"""
@@ -307,6 +333,7 @@ def monitor_discord():
 
 def health_monitor():
     """Мониторинг здоровья бота"""
+    logger.info("❤️ Запускаю монитор здоровья...")
     while True:
         try:
             # Отправляем статус каждые 12 часов
@@ -429,10 +456,32 @@ def status_page():
     """
     return status_html
 
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    """Обрабатывает вебхук от Telegram (если кто-то его настроил)"""
+    try:
+        update = request.get_json()
+        logger.info(f"📨 Получен вебхук: {update}")
+        return 'OK'
+    except Exception as e:
+        logger.error(f"❌ Ошибка обработки вебхука: {e}")
+        return 'ERROR'
+
 # Запускаем все потоки
-threading.Thread(target=monitor_discord, daemon=True).start()
-threading.Thread(target=telegram_poller, daemon=True).start()
-threading.Thread(target=health_monitor, daemon=True).start()
+def start_background_threads():
+    logger.info("🔄 Запускаю фоновые потоки...")
+    
+    threads = [
+        threading.Thread(target=monitor_discord, daemon=True),
+        threading.Thread(target=telegram_poller, daemon=True),
+        threading.Thread(target=health_monitor, daemon=True)
+    ]
+    
+    for thread in threads:
+        thread.start()
+        logger.info(f"✅ Поток {thread.name} запущен")
+    
+    return threads
 
 if __name__ == '__main__':
     logger.info("🚀 ЗАПУСК УЛУЧШЕННОГО БОТА!")
@@ -440,6 +489,12 @@ if __name__ == '__main__':
     logger.info("🤖 Бот: Все сообщения + управление")
     logger.info("⌨️ Команды: /start, /status, /enable, /disable")
     logger.info("📊 Авто-статус: каждые 12 часов")
+    
+    # Удаляем вебхук если он есть
+    setup_webhook()
+    
+    # Запускаем фоновые потоки
+    start_background_threads()
     
     # Отправляем сообщения о запуске
     startup_msg_channel = "🚀 <b>Мониторинг запущен!</b>\n📢 Канал активен и готов к работе"
