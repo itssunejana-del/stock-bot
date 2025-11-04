@@ -5,6 +5,7 @@ import time
 import logging
 import threading
 from datetime import datetime
+import re
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -24,6 +25,8 @@ startup_time = datetime.now()
 channel_enabled = True
 bot_status = "🟢 Работает нормально"
 last_error = None
+# Защита от дублирования - храним обработанные сообщения
+processed_messages_cache = set()
 
 def send_telegram_message(chat_id, text, parse_mode="HTML"):
     """Отправляет сообщение в указанный чат/канал"""
@@ -148,7 +151,6 @@ def telegram_poller():
             
             if response.status_code == 200:
                 data = response.json()
-                logger.info(f"📨 Получен ответ от Telegram: {data}")
                 
                 if data.get('ok') and data.get('result'):
                     updates = data['result']
@@ -210,6 +212,27 @@ def get_discord_messages():
         logger.error(f"💥 {error_msg}")
         return None
 
+def clean_ember_text(text):
+    """Очищает текст от эмодзи Discord и форматирует в красивый список"""
+    # Удаляем эмодзи Discord формата <:name:123456>
+    text = re.sub(r'<:[a-zA-Z0-9_]+:\d+>', '', text)
+    
+    # Удаляем лишние звездочки для жирного текста
+    text = re.sub(r'\*\*', '', text)
+    
+    # Разделяем на строки и очищаем каждую
+    lines = text.split('\n')
+    cleaned_lines = []
+    
+    for line in lines:
+        line = line.strip()
+        if line and not line.startswith('Grow a Garden Stock') and not line.startswith('Seeds') and not line.startswith('Gear'):
+            # Оставляем только название и количество
+            if 'x' in line and any(char.isdigit() for char in line):
+                cleaned_lines.append(line)
+    
+    return '\n'.join(cleaned_lines)
+
 def format_ember_message(message):
     """Форматирует сообщение от Ember для Telegram"""
     content = message.get('content', '')
@@ -225,12 +248,14 @@ def format_ember_message(message):
         for field in embed.get('fields', []):
             full_text += f"\n{field.get('name')}: {field.get('value')}"
     
-    full_text = full_text.replace('<', '&lt;').replace('>', '&gt;')
-    return full_text.strip()
+    # Очищаем текст
+    cleaned_text = clean_ember_text(full_text)
+    
+    return cleaned_text.strip()
 
 def check_ember_messages(messages):
     """Проверяет сообщения от Ember бота"""
-    global last_processed_id, bot_status, last_error
+    global last_processed_id, bot_status, last_error, processed_messages_cache
     
     if not messages:
         return False
@@ -247,41 +272,52 @@ def check_ember_messages(messages):
             send_to_bot("🚀 <b>Бот запущен и начал мониторинг!</b>")
             return False
         
+        # Очищаем кэш если он слишком большой
+        if len(processed_messages_cache) > 100:
+            processed_messages_cache = set()
+            logger.info("🧹 Очистил кэш обработанных сообщений")
+        
         for message in messages:
             message_id = message['id']
             
+            # Если дошли до уже обработанных - выходим
             if message_id <= last_processed_id:
                 break
             
+            # Защита от дублирования - проверяем в кэше
+            if message_id in processed_messages_cache:
+                logger.info(f"⏩ Пропускаем уже обработанное сообщение: {message_id}")
+                continue
+            
             author = message.get('author', {}).get('username', '')
             
+            # Проверяем только сообщения от Ember бота
             if 'Ember' in author:
                 logger.info(f"🔍 Новое сообщение от Ember: {message_id}")
                 
+                # Добавляем в кэш обработанных
+                processed_messages_cache.add(message_id)
+                
                 formatted_message = format_ember_message(message)
                 
-                # Отправляем ВСЕ сообщения Ember в бота
-                bot_message = (
-                    f"🤖 <b>Новое сообщение от Ember</b>\n"
-                    f"📅 ID: <code>{message_id}</code>\n"
-                    f"⏰ Время: {datetime.now().strftime('%H:%M:%S')}\n"
-                    f"📄 Содержание:\n<code>{formatted_message}</code>"
-                )
-                send_to_bot(bot_message)
-                
-                # Проверяем на наличие томата (для канала)
-                full_text = formatted_message.lower()
-                if any(tomato in full_text for tomato in ['tomato', ':tomato']):
-                    logger.info("🎯 ОБНАРУЖЕН ТОМАТ В СООБЩЕНИИ EMBER!")
-                    
-                    channel_message = (
-                        f"🍅 <b>Томат в стоке!</b>\n"
-                        f"📅 Время: {datetime.now().strftime('%H:%M:%S')}\n"
-                        f"🤖 От: Ember Bot\n"
-                        f"🆔 ID: {message_id}"
+                if formatted_message:  # Если есть что показывать
+                    # Отправляем ВСЕ сообщения Ember в бота (красиво отформатированные)
+                    bot_message = (
+                        f"🛒 <b>Новый сток</b>\n"
+                        f"⏰ {datetime.now().strftime('%H:%M:%S')}\n\n"
+                        f"{formatted_message}"
                     )
-                    send_to_channel(channel_message)
-                    found_tomato = True
+                    send_to_bot(bot_message)
+                    
+                    # Проверяем на наличие томата (для канала)
+                    full_text = formatted_message.lower()
+                    if any(tomato in full_text for tomato in ['tomato', 'томат']):
+                        logger.info("🎯 ОБНАРУЖЕН ТОМАТ В СООБЩЕНИИ EMBER!")
+                        
+                        # Отправляем в КАНАЛ (простое сообщение)
+                        channel_message = f"🍅 Томат в стоке!\n\n{formatted_message}"
+                        send_to_channel(channel_message)
+                        found_tomato = True
         
         last_processed_id = newest_id
         bot_status = "🟢 Работает нормально"
