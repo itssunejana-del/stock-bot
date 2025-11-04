@@ -6,7 +6,6 @@ import logging
 import threading
 from datetime import datetime
 import re
-import html
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -30,7 +29,7 @@ TARGET_SEEDS = {
     },
     'bamboo': {
         'keywords': ['bamboo', 'бамбук', ':bamboo'],
-        'sticker_id': "CAACAgIAAxkBAAEPs0ZpCf9SjVZjllFEZLr2drRwSSk0hAACkYcAAuOaaUskfqF4nmGFaDYE",
+        'sticker_id': "CAACAgIAAxkBAAEPs0ZpCf9SjVZjllFEZLr2druwSSk0hAACkYcAAuOaaUskfqF4nmGFaDYE",
         'emoji': '🎍'
     }
 }
@@ -214,7 +213,7 @@ def handle_telegram_command(chat_id, command, message=None):
             "🎮 <b>Добро пожаловать!</b>\n\n"
             "Я бот для отслеживания стоков в игре <b>Grow a Garden</b>.\n"
             "Автоматически мониторю Discord канал с ботом Ember и присылаю уведомления о стоках.\n\n"
-            "📱 <b>Вам в личные сообщения:</b> Все стоки от Ember (ПОЛНЫЙ ТЕКСТ)\n"
+            "📱 <b>Вам в личные сообщения:</b> Все стоки от Ember (красиво отформатированные)\n"
             "📢 <b>В канал:</b> Только стикеры при редких семенах\n"
             "🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
             "📊 <b>Авто-статус:</b> Каждые 5 часов\n\n"
@@ -323,6 +322,29 @@ def get_discord_messages():
         logger.error(f"💥 {error_msg}")
         return None
 
+def clean_ember_text_for_display(text):
+    """Очищает текст для красивого отображения в Telegram, но СОХРАНЯЕТ все семена"""
+    # Удаляем эмодзи Discord формата <:name:123456> но сохраняем названия
+    text = re.sub(r'<:[a-zA-Z0-9_]+:(\d+)>', '', text)
+    
+    # Удаляем лишние звездочки для жирного текста, но оставляем текст
+    text = re.sub(r'\*\*', '', text)
+    
+    # Удаляем HTML-теги времени
+    text = re.sub(r'<t:\d+:[tR]>', '', text)
+    
+    # Убираем лишние пустые строки
+    lines = text.split('\n')
+    cleaned_lines = []
+    
+    for line in lines:
+        line = line.strip()
+        # Сохраняем ВСЕ строки с семенами и предметами
+        if line and ('x' in line or ':' in line or any(word in line.lower() for word in ['seeds', 'gear', 'alert'])):
+            cleaned_lines.append(line)
+    
+    return '\n'.join(cleaned_lines)
+
 def extract_all_text_from_message(message):
     """Извлекает ВЕСЬ текст из сообщения Ember включая fields"""
     content = message.get('content', '')
@@ -345,14 +367,18 @@ def extract_all_text_from_message(message):
     return all_text
 
 def format_ember_message_for_bot(message):
-    """Форматирует сообщение от Ember для Telegram бота - ПОЛНЫЙ ТЕКСТ БЕЗ ОЧИСТКИ"""
+    """Форматирует сообщение от Ember для Telegram бота - КРАСИВО И ЧИТАБЕЛЬНО"""
     content = message.get('content', '')
     embeds = message.get('embeds', [])
     
     full_text = content
     for embed in embeds:
         if embed.get('title'):
-            full_text += f"\n\n{embed.get('title')}"
+            # Очищаем заголовок от тегов времени
+            title = re.sub(r'<t:\d+:[tR]>', '', embed.get('title', ''))
+            if title.strip():
+                full_text += f"\n\n{title}"
+        
         if embed.get('description'):
             full_text += f"\n{embed.get('description')}"
         
@@ -360,9 +386,13 @@ def format_ember_message_for_bot(message):
         for field in embed.get('fields', []):
             field_name = field.get('name', '')
             field_value = field.get('value', '')
-            full_text += f"\n{field_name}: {field_value}"
+            if field_name and field_value:
+                full_text += f"\n\n{field_name}:\n{field_value}"
     
-    return full_text.strip()
+    # Применяем красивую очистку
+    cleaned_text = clean_ember_text_for_display(full_text)
+    
+    return cleaned_text.strip()
 
 def check_ember_messages(messages):
     """Проверяет сообщения от Ember бота"""
@@ -404,18 +434,16 @@ def check_ember_messages(messages):
                 
                 processed_messages_cache.add(message_id)
                 
-                # 📱 В БОТА - ПОЛНЫЙ ОРИГИНАЛЬНЫЙ ТЕКСТ (без HTML тегов)
-                full_message_text = format_ember_message_for_bot(message)
+                # 📱 В БОТА - КРАСИВО ОТФОРМАТИРОВАННЫЙ ТЕКСТ
+                formatted_message = format_ember_message_for_bot(message)
                 
-                if full_message_text:
-                    # 🔧 ИСПРАВЛЕНИЕ: Убираем parse_mode для обычного текста
+                if formatted_message:
                     bot_message = (
-                        f"🛒 Новый сток от Ember\n"
+                        f"🛒 <b>Новый сток от Ember</b>\n"
                         f"⏰ {datetime.now().strftime('%H:%M:%S')}\n\n"
-                        f"{full_message_text}"
+                        f"<code>{formatted_message}</code>"
                     )
-                    # Отправляем БЕЗ parse_mode
-                    send_telegram_message(TELEGRAM_BOT_CHAT_ID, bot_message, parse_mode=None)
+                    send_to_bot(bot_message)
                     
                     # 🔍 Проверяем на наличие всех отслеживаемых семян в ПОЛНОМ тексте
                     full_search_text = extract_all_text_from_message(message)
@@ -445,6 +473,8 @@ def check_ember_messages(messages):
         last_error = error_msg
         send_to_bot(f"🚨 <b>Ошибка в мониторинге:</b>\n<code>{last_error}</code>")
         return False
+
+# ... остальные функции без изменений ...
 
 def monitor_discord():
     """Основная функция мониторинга"""
@@ -516,7 +546,7 @@ def health_monitor():
         except Exception as e:
             logger.error(f"❌ Ошибка отправки авто-статуса: {e}")
 
-# ... остальные функции (Flask routes, start_background_threads) остаются без изменений ...
+# ... остальные Flask routes и start_background_threads без изменений ...
 
 def start_background_threads():
     logger.info("🔄 Запускаю фоновые потоки...")
@@ -537,9 +567,9 @@ def start_background_threads():
 if __name__ == '__main__':
     seeds_list = ", ".join([f"{config['emoji']} {name}" for name, config in TARGET_SEEDS.items()])
     
-    logger.info("🚀 ЗАПУСК ИСПРАВЛЕННОГО БОТА!")
-    logger.info("📱 Вам в бота: ВСЕ стоки от Ember (ПОЛНЫЙ ТЕКСТ БЕЗ HTML)")
-    logger.info("📢 В канал: ТОЛЬКО стикеры при редких семенах")
+    logger.info("🚀 ЗАПУСК БОТА С КРАСИВЫМ ФОРМАТИРОВАНИЕМ!")
+    logger.info("📱 Вам в бота: Все стоки от Ember (красиво отформатированные)")
+    logger.info("📢 В канал: Только стикеры при редких семенах")
     logger.info(f"🎯 Отслеживаю: {seeds_list}")
     logger.info("🏓 Самопинг: Активен (каждые 8 минут)")
     logger.info("📊 Авто-статус: Каждые 5 часов")
@@ -549,8 +579,8 @@ if __name__ == '__main__':
     seeds_list_bot = "\n".join([f"{config['emoji']} {name.capitalize()}" for name, config in TARGET_SEEDS.items()])
     
     startup_msg_bot = (
-        f"🚀 <b>Бот запущен с исправлениями!</b>\n\n"
-        f"📱 <b>Вам в бота:</b> Все стоки от Ember (ПОЛНЫЙ ТЕКСТ)\n"
+        f"🚀 <b>Бот запущен с красивым форматированием!</b>\n\n"
+        f"📱 <b>Вам в бота:</b> Все стоки от Ember (читабельный текст)\n"
         f"📢 <b>В канал:</b> Только стикеры при редких семенах\n"
         f"🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
         f"📊 <b>Авто-статус:</b> Каждые 5 часов\n\n"
