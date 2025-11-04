@@ -11,8 +11,10 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+# Токены и ID
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+TELEGRAM_CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')  # Канал для томатов
+TELEGRAM_BOT_CHAT_ID = os.getenv('TELEGRAM_BOT_CHAT_ID')  # Личные сообщения с ботом
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 DISCORD_CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')
 
@@ -20,23 +22,23 @@ DISCORD_CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')
 last_processed_id = None
 startup_time = datetime.now()
 
-def send_telegram(text):
-    """Отправляет сообщение в Telegram"""
-    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+def send_telegram_message(chat_id, text, parse_mode="HTML"):
+    """Отправляет сообщение в указанный чат/канал"""
+    if not TELEGRAM_TOKEN or not chat_id:
         logger.error("❌ Не настроены переменные Telegram")
         return False
         
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         data = {
-            "chat_id": TELEGRAM_CHAT_ID, 
+            "chat_id": chat_id, 
             "text": text,
-            "parse_mode": "HTML"
+            "parse_mode": parse_mode
         }
         response = requests.post(url, data=data, timeout=10)
         
         if response.status_code == 200:
-            logger.info(f"📱 Отправлено в Telegram: {text}")
+            logger.info(f"📱 Отправлено в Telegram ({chat_id}): {text[:100]}...")
             return True
         else:
             logger.error(f"❌ Ошибка Telegram {response.status_code}: {response.text}")
@@ -44,6 +46,14 @@ def send_telegram(text):
     except Exception as e:
         logger.error(f"❌ Ошибка подключения к Telegram: {e}")
         return False
+
+def send_to_channel(text):
+    """Отправляет сообщение в ТЕЛЕГРАМ КАНАЛ (только томаты)"""
+    return send_telegram_message(TELEGRAM_CHANNEL_ID, text)
+
+def send_to_bot(text):
+    """Отправляет сообщение в ТЕЛЕГРАМ БОТА (все уведомления)"""
+    return send_telegram_message(TELEGRAM_BOT_CHAT_ID, text)
 
 def get_discord_messages():
     """Получает сообщения из Discord канала"""
@@ -57,18 +67,40 @@ def get_discord_messages():
             return response.json()
         else:
             logger.error(f"❌ Ошибка Discord API: {response.status_code}")
+            error_msg = f"🚨 <b>Ошибка Discord</b>\nКод: {response.status_code}\n"
             if response.status_code == 401:
-                logger.error("❌ Неверный Discord токен!")
+                error_msg += "❌ Неверный Discord токен!"
             elif response.status_code == 403:
-                logger.error("❌ Нет доступа к каналу!")
+                error_msg += "❌ Нет доступа к каналу!"
+            else:
+                error_msg += "❌ Неизвестная ошибка API"
+            
+            send_to_bot(error_msg)
             return None
                 
     except Exception as e:
         logger.error(f"💥 Ошибка при запросе к Discord: {e}")
+        send_to_bot(f"🚨 <b>Критическая ошибка</b>\nНе удалось подключиться к Discord:\n<code>{e}</code>")
         return None
 
-def check_for_tomato(messages):
-    """Проверяет сообщения на наличие томата"""
+def format_ember_message(message):
+    """Форматирует сообщение от Ember для Telegram"""
+    content = message.get('content', '')
+    embeds = message.get('embeds', [])
+    
+    # Собираем весь текст
+    full_text = content
+    for embed in embeds:
+        full_text += f"\n{embed.get('title', '')}"
+        full_text += f"\n{embed.get('description', '')}"
+        
+        for field in embed.get('fields', []):
+            full_text += f"\n{field.get('name', '')}: {field.get('value', '')}"
+    
+    return full_text
+
+def check_ember_messages(messages):
+    """Проверяет сообщения от Ember бота"""
     global last_processed_id
     
     if not messages:
@@ -84,6 +116,7 @@ def check_for_tomato(messages):
     if last_processed_id is None:
         last_processed_id = newest_id
         logger.info(f"🚀 Первый запуск. Запомнил сообщение: {last_processed_id}")
+        send_to_bot("🚀 <b>Бот запущен и начал мониторинг!</b>")
         return False
     
     # Проверяем только сообщения новее последнего обработанного
@@ -95,38 +128,38 @@ def check_for_tomato(messages):
             break
         
         author = message.get('author', {}).get('username', '')
-        content = message.get('content', '')
         
-        logger.info(f"🔍 Проверяю сообщение {message_id} от {author}")
-        
-        # Проверяем сообщения от Ember бота
-        if 'Ember' in author or 'Stock' in content:
-            # Получаем весь текст из эмбедов
-            full_text = content.lower()
-            embeds = message.get('embeds', [])
+        # Проверяем только сообщения от Ember бота
+        if 'Ember' in author:
+            logger.info(f"🔍 Новое сообщение от Ember: {message_id}")
             
-            for embed in embeds:
-                full_text += f" {embed.get('title', '').lower()}"
-                full_text += f" {embed.get('description', '').lower()}"
-                
-                for field in embed.get('fields', []):
-                    full_text += f" {field.get('name', '').lower()}"
-                    full_text += f" {field.get('value', '').lower()}"
+            # Форматируем сообщение для Telegram
+            formatted_message = format_ember_message(message)
+            message_preview = formatted_message[:300] + "..." if len(formatted_message) > 300 else formatted_message
             
-            logger.info(f"📄 Текст сообщения Ember: {full_text[:200]}...")
+            # Отправляем ВСЕ сообщения Ember в бота
+            bot_message = (
+                f"🤖 <b>Новое сообщение от Ember</b>\n"
+                f"📅 ID: <code>{message_id}</code>\n"
+                f"⏰ Время: {datetime.now().strftime('%H:%M:%S')}\n"
+                f"📄 Содержание:\n<code>{message_preview}</code>"
+            )
+            send_to_bot(bot_message)
             
-            # Ищем томат в любом виде
-            if any(tomato in full_text for tomato in ['tomato', ':tomato', 'помидор', 'томат']):
+            # Проверяем на наличие томата (для канала)
+            full_text = formatted_message.lower()
+            if any(tomato in full_text for tomato in ['tomato', ':tomato']):
                 logger.info("🎯 ОБНАРУЖЕН ТОМАТ В СООБЩЕНИИ EMBER!")
                 
-                # Формируем красивое сообщение
-                message_text = "🍅 <b>Томат в стоке!</b>\n"
-                message_text += f"📅 Время: {datetime.now().strftime('%H:%M:%S')}\n"
-                message_text += "🤖 От: Ember Bot"
-                
-                send_telegram(message_text)
+                # Отправляем в КАНАЛ
+                channel_message = (
+                    f"🍅 <b>Томат в стоке!</b>\n"
+                    f"📅 Время: {datetime.now().strftime('%H:%M:%S')}\n"
+                    f"🤖 От: Ember Bot\n"
+                    f"🆔 ID: {message_id}"
+                )
+                send_to_channel(channel_message)
                 found_tomato = True
-                break
     
     # Обновляем последнее обработанное сообщение
     last_processed_id = newest_id
@@ -145,12 +178,12 @@ def monitor_discord():
             messages = get_discord_messages()
             
             if messages is not None:
-                found = check_for_tomato(messages)
+                found_tomato = check_ember_messages(messages)
                 
-                if found:
-                    logger.info("✅ Уведомление о томате отправлено!")
+                if found_tomato:
+                    logger.info("✅ Уведомление о томате отправлено в канал!")
                 else:
-                    logger.info("🔍 Томатов нет в новых сообщениях")
+                    logger.info("🔍 Новых сообщений Ember обработано")
                 
                 error_count = 0  # Сброс счетчика ошибок
             else:
@@ -159,7 +192,7 @@ def monitor_discord():
                 
                 if error_count >= max_errors:
                     logger.error("🚨 Слишком много ошибок, перезапуск через 5 минут...")
-                    send_telegram("🚨 <b>ВНИМАНИЕ!</b>\nБот обнаружил проблемы с подключением к Discord.\nПерезапускаюсь...")
+                    send_to_bot("🚨 <b>ВНИМАНИЕ!</b>\nБот обнаружил проблемы с подключением к Discord.\nПерезапускаюсь через 5 минут...")
                     time.sleep(300)  # Ждем 5 минут перед повторной попыткой
                     error_count = 0
             
@@ -168,6 +201,7 @@ def monitor_discord():
             
         except Exception as e:
             logger.error(f"💥 Критическая ошибка в мониторинге: {e}")
+            send_to_bot(f"🚨 <b>Критическая ошибка!</b>\nВ мониторинге:\n<code>{e}</code>")
             error_count += 1
             time.sleep(60)
 
@@ -179,15 +213,17 @@ def health_check():
             hours = uptime.total_seconds() / 3600
             
             status_text = (
-                f"🤖 <b>Статус бота</b>\n"
+                f"📊 <b>Статус бота</b>\n"
                 f"⏰ Работает: {hours:.1f} часов\n"
                 f"📅 Запущен: {startup_time.strftime('%d.%m.%Y %H:%M')}\n"
-                f"🔄 Мониторю: Ember bot → Tomato\n"
+                f"🔄 Мониторю: Ember bot\n"
+                f"📢 Канал: Уведомления о томатах\n"
+                f"🤖 Бот: Все сообщения + ошибки\n"
                 f"✅ Все системы в норме"
             )
             
-            send_telegram(status_text)
-            logger.info("📊 Отчет о состоянии отправлен")
+            send_to_bot(status_text)
+            logger.info("📊 Отчет о состоянии отправлен боту")
             
         except Exception as e:
             logger.error(f"❌ Ошибка отправки отчета: {e}")
@@ -208,17 +244,33 @@ def home():
                 body {{ font-family: Arial, sans-serif; margin: 40px; }}
                 .status {{ background: #f0f8f0; padding: 20px; border-radius: 10px; }}
                 .info {{ margin: 10px 0; }}
+                .channel {{ background: #e3f2fd; padding: 15px; margin: 10px 0; border-radius: 8px; }}
+                .bot {{ background: #f3e5f5; padding: 15px; margin: 10px 0; border-radius: 8px; }}
             </style>
         </head>
         <body>
-            <h1>🍅 Мониторинг томатов</h1>
+            <h1>🍅 Умный мониторинг томатов</h1>
+            
             <div class="status">
                 <div class="info"><strong>Бот:</strong> Активен ✅</div>
                 <div class="info"><strong>Время работы:</strong> {hours:.1f} часов</div>
                 <div class="info"><strong>Запущен:</strong> {startup_time.strftime('%d.%m.%Y %H:%M:%S')}</div>
-                <div class="info"><strong>Отслеживаю:</strong> Ember bot → Tomato</div>
+                <div class="info"><strong>Отслеживаю:</strong> Ember bot</div>
                 <div class="info"><strong>Последнее сообщение:</strong> {last_processed_id or 'Еще не проверял'}</div>
             </div>
+            
+            <div class="channel">
+                <h3>📢 Телеграм КАНАЛ</h3>
+                <p>Получает: <strong>Только уведомления о томатах</strong></p>
+                <p>Для: Быстрые оповещения о стоках</p>
+            </div>
+            
+            <div class="bot">
+                <h3>🤖 Телеграм БОТ</h3>
+                <p>Получает: <strong>Все сообщения Ember + ошибки + статусы</strong></p>
+                <p>Для: Полный мониторинг и отладка</p>
+            </div>
+            
             <p><a href="/test">Тестировать сейчас</a> | <a href="/status">Отправить статус</a></p>
         </body>
     </html>
@@ -229,41 +281,52 @@ def test():
     """Принудительная проверка"""
     messages = get_discord_messages()
     if messages:
-        found = check_for_tomato(messages)
-        return f"Проверка завершена: {'🎯 ТОМАТ НАЙДЕН!' if found else '🔍 Томатов нет'}"
+        found = check_ember_messages(messages)
+        return f"Проверка завершена: {'🎯 ТОМАТ НАЙДЕН!' if found else '🔍 Томатов нет, но сообщения обработаны'}"
     else:
         return "❌ Ошибка при получении сообщений"
 
 @app.route('/status')
 def status():
-    """Отправляет статус в Telegram"""
+    """Отправляет статус в Telegram бота"""
     uptime = datetime.now() - startup_time
     hours = uptime.total_seconds() / 3600
     
     status_text = (
-        f"🔍 <b>Ручная проверка</b>\n"
+        f"🔍 <b>Ручная проверка статуса</b>\n"
         f"⏰ Работает: {hours:.1f} часов\n"
         f"📅 Запущен: {startup_time.strftime('%d.%m.%Y %H:%M')}\n"
-        f"🔄 Мониторю: Ember bot → Tomato\n"
+        f"🔄 Мониторю: Ember bot\n"
         f"📝 Последнее сообщение: {last_processed_id or 'Еще не проверял'}\n"
         f"✅ Бот активен и работает"
     )
     
-    success = send_telegram(status_text)
-    return f"Статус: {'✅ Отправлен' if success else '❌ Ошибка'}"
+    success = send_to_bot(status_text)
+    return f"Статус: {'✅ Отправлен боту' if success else '❌ Ошибка'}"
 
 # Запускаем мониторинг в отдельных потоках
 threading.Thread(target=monitor_discord, daemon=True).start()
 threading.Thread(target=health_check, daemon=True).start()
 
 if __name__ == '__main__':
-    logger.info("🚀 ЗАПУСК СУПЕР-НАДЕЖНОГО БОТА ДЛЯ EMBER!")
-    logger.info("📊 Отслеживаю: Ember bot → Tomato")
+    logger.info("🚀 ЗАПУСК УМНОГО БОТА С РАЗДЕЛЕНИЕМ УВЕДОМЛЕНИЙ!")
+    logger.info("📢 Канал: Только томаты")
+    logger.info("🤖 Бот: Все сообщения + ошибки + статусы")
     logger.info("🔄 Проверка каждые 30 секунд")
-    logger.info("📡 Отчет о состоянии каждые 6 часов")
     
-    # Отправляем сообщение о запуске
-    startup_msg = "🚀 <b>Бот запущен!</b>\n📊 Начинаю мониторинг томатов от Ember бота\n⏰ Проверка каждые 30 секунд"
-    send_telegram(startup_msg)
+    # Отправляем сообщения о запуске
+    startup_msg_channel = "🚀 <b>Мониторинг запущен!</b>\n📢 Этот канал будет получать только уведомления о томатах\n🍅 Ожидайте оповещений!"
+    startup_msg_bot = (
+        "🚀 <b>Бот запущен!</b>\n\n"
+        "🤖 <b>Я буду присылать:</b>\n"
+        "• Все сообщения от Ember бота\n"
+        "• Ошибки и проблемы\n" 
+        "• Статусы каждые 6 часов\n"
+        "• Уведомления о перезапусках\n\n"
+        "📊 <b>Начинаю мониторинг...</b>"
+    )
+    
+    send_to_channel(startup_msg_channel)
+    send_to_bot(startup_msg_bot)
     
     app.run(host='0.0.0.0', port=5000)
