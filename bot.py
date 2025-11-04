@@ -18,6 +18,32 @@ TELEGRAM_CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')
 TELEGRAM_BOT_CHAT_ID = os.getenv('TELEGRAM_BOT_CHAT_ID')
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 DISCORD_CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')
+RENDER_SERVICE_URL = os.getenv('RENDER_SERVICE_URL', 'https://stock-bot-cj4s.onrender.com')
+
+# Настройки отслеживаемых семян (легко менять!)
+TARGET_SEEDS = {
+    'tomato': {
+        'keywords': ['tomato', 'томат', ':tomato'],
+        'sticker_id': "CAACAgIAAxkBAAEPszZpCfLc2HlDxyNpkHpQmxlBl94iwQACjYEAApqASUgobiA_uUJNkzYE",
+        'emoji': '🍅'
+    },
+    'bamboo': {
+        'keywords': ['bamboo', 'бамбук', ':bamboo'],
+        'sticker_id': "CAACAgIAAxkBAAEPs0ZpCf9SjVZjllFEZLr2drRwSSk0hAACkYcAAuOaaUskfqF4nmGFaDYE",
+        'emoji': '🎍'
+    }
+    # Другие семена можно добавить позже:
+    # 'mango': {
+    #     'keywords': ['mango', 'манго', ':mango'],
+    #     'sticker_id': "ID_СТИКЕРА_МАНГО",
+    #     'emoji': '🥭'
+    # },
+    # 'pineapple': {
+    #     'keywords': ['pineapple', 'ананас', ':pineapple'],
+    #     'sticker_id': "ID_СТИКЕРА_АНАНАС", 
+    #     'emoji': '🍍'
+    # }
+}
 
 # Глобальные переменные
 last_processed_id = None
@@ -27,6 +53,36 @@ bot_status = "🟢 Работает нормально"
 last_error = None
 processed_messages_cache = set()
 telegram_offset = 0
+ping_count = 0
+last_ping_time = None
+found_seeds_count = {'tomato': 0, 'bamboo': 0}  # Счетчик найденных семян
+
+def self_pinger():
+    """Самопинг чтобы Render не останавливал сервис"""
+    global ping_count, last_ping_time
+    
+    logger.info("🔄 Запускаю самопинг...")
+    
+    # Ждем немного перед первым пингом, чтобы сервер точно запустился
+    time.sleep(30)
+    
+    while True:
+        try:
+            ping_count += 1
+            last_ping_time = datetime.now()
+            logger.info(f"🏓 Самопинг #{ping_count}...")
+            
+            response = requests.get(f"{RENDER_SERVICE_URL}/", timeout=10)
+            if response.status_code == 200:
+                logger.info("✅ Самопинг успешен - сервис активен")
+            else:
+                logger.warning(f"⚠️ Самопинг: статус {response.status_code}")
+        except Exception as e:
+            logger.error(f"❌ Ошибка самопинга: {e}")
+        
+        # Пингуем каждые 8 минут (меньше чем 15 минут лимит Render)
+        logger.info("💤 Ожидаю 8 минут до следующего самопинга...")
+        time.sleep(480)  # 8 минут
 
 def send_telegram_message(chat_id, text, parse_mode="HTML"):
     """Отправляет сообщение в указанный чат/канал"""
@@ -96,24 +152,36 @@ def send_to_bot(text):
 
 def send_help_message(chat_id):
     """Отправляет сообщение со списком команд"""
+    # Собираем список отслеживаемых семян
+    seeds_list = "\n".join([f"{config['emoji']} {name.capitalize()}" for name, config in TARGET_SEEDS.items()])
+    
     help_text = (
-        "🤖 <b>Бот мониторинга Grow a Garden</b>\n\n"
-        "📋 <b>Доступные команды:</b>\n"
-        "/start - Начать работу\n"
-        "/status - Статус бота\n" 
-        "/enable - Включить уведомления в канал\n"
-        "/disable - Выключить уведомления в канал\n"
-        "/help - Показать это сообщение\n\n"
-        "🔄 Бот автоматически отслеживает стоки от Ember и присылает уведомления о томатах."
+        f"🤖 <b>Бот мониторинга Grow a Garden</b>\n\n"
+        f"📋 <b>Доступные команды:</b>\n"
+        f"/start - Начать работу\n"
+        f"/status - Статус бота\n" 
+        f"/enable - Включить уведомления в канал\n"
+        f"/disable - Выключить уведомления в канал\n"
+        f"/help - Показать это сообщение\n\n"
+        f"🎯 <b>Отслеживаю семена:</b>\n"
+        f"{seeds_list}\n\n"
+        f"🔄 Бот автоматически отслеживает стоки от Ember и присылает уведомления."
     )
     send_telegram_message(chat_id, help_text)
 
 def send_bot_status(chat_id):
     """Отправляет статус бота"""
-    global bot_status, last_error, channel_enabled
+    global bot_status, last_error, channel_enabled, ping_count, last_ping_time, found_seeds_count
     
     uptime = datetime.now() - startup_time
     hours = uptime.total_seconds() / 3600
+    
+    # Форматируем время последнего пинга
+    last_ping_str = "Еще не было" if not last_ping_time else last_ping_time.strftime('%H:%M:%S')
+    
+    # Собираем статистику по семенам
+    seeds_stats = "\n".join([f"{TARGET_SEEDS[name]['emoji']} {name.capitalize()}: {count} раз" 
+                           for name, count in found_seeds_count.items()])
     
     status_text = (
         f"📊 <b>Статус бота</b>\n\n"
@@ -122,11 +190,14 @@ def send_bot_status(chat_id):
         f"📅 Запущен: {startup_time.strftime('%d.%m.%Y %H:%M')}\n"
         f"📢 Канал: {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}\n"
         f"🔄 Отслеживаю: Ember bot\n"
-        f"📝 Последнее сообщение: {last_processed_id or 'Еще не проверял'}\n"
+        f"🏓 Самопинг: {ping_count} раз (последний: {last_ping_str})\n"
+        f"📝 Последнее сообщение: {last_processed_id or 'Еще не проверял'}\n\n"
+        f"🎯 <b>Найдено семян:</b>\n"
+        f"{seeds_stats}"
     )
     
     if last_error:
-        status_text += f"\n⚠️ <b>Последняя ошибка:</b>\n<code>{last_error}</code>"
+        status_text += f"\n\n⚠️ <b>Последняя ошибка:</b>\n<code>{last_error}</code>"
     
     send_telegram_message(chat_id, status_text)
 
@@ -147,18 +218,25 @@ def handle_telegram_command(chat_id, command, message=None):
             f"🆔 File ID: <code>{file_id}</code>\n"
             f"😊 Emoji: {emoji}\n\n"
             f"📋 <b>Для использования в коде:</b>\n"
-            f"<code>tomato_sticker_id = \"{file_id}\"</code>"
+            f"<code>sticker_id = \"{file_id}\"</code>"
         )
         send_telegram_message(chat_id, sticker_info)
         return
     
     if command == '/start':
+        # Собираем список отслеживаемых семян
+        seeds_list = "\n".join([f"{config['emoji']} {name.capitalize()}" for name, config in TARGET_SEEDS.items()])
+        
         welcome_text = (
             "🎮 <b>Добро пожаловать!</b>\n\n"
             "Я бот для отслеживания стоков в игре <b>Grow a Garden</b>.\n"
             "Автоматически мониторю Discord канал с ботом Ember и присылаю уведомления о стоках.\n\n"
             "📱 <b>Вам в личные сообщения:</b> Все стоки от Ember\n"
-            "📢 <b>В канал:</b> Только стикер при томате\n\n"
+            "📢 <b>В канал:</b> Только стикеры при редких семенах\n"
+            "🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
+            "📊 <b>Авто-статус:</b> Каждые 5 часов\n\n"
+            f"🎯 <b>Отслеживаю семена:</b>\n"
+            f"{seeds_list}\n\n"
             "🎯 <b>Чтобы получить ID стикера:</b> Просто отправьте мне любой стикер!\n\n"
             "Используйте /help для списка команд."
         )
@@ -172,11 +250,11 @@ def handle_telegram_command(chat_id, command, message=None):
         
     elif command == '/enable':
         channel_enabled = True
-        send_telegram_message(chat_id, "✅ <b>Уведомления в канал ВКЛЮЧЕНЫ</b>\nТеперь томаты будут приходить в канал (стикер).")
+        send_telegram_message(chat_id, "✅ <b>Уведомления в канал ВКЛЮЧЕНЫ</b>\nТеперь стикеры будут приходить в канал при обнаружении семян.")
         
     elif command == '/disable':
         channel_enabled = False
-        send_telegram_message(chat_id, "⏸️ <b>Уведомления в канал ВЫКЛЮЧЕНЫ</b>\nУведомления о томатах (стикеры) временно приостановлены.")
+        send_telegram_message(chat_id, "⏸️ <b>Уведомления в канал ВЫКЛЮЧЕНЫ</b>\nУведомления о семенах (стикеры) временно приостановлены.")
         
     else:
         send_telegram_message(chat_id, "❌ Неизвестная команда. Используйте /help для списка команд.")
@@ -301,7 +379,7 @@ def extract_all_text_from_message(message):
         if embed.get('description'):
             all_text += f"\n{embed.get('description')}"
         
-        # 🔧 ВАЖНО: Добавляем поля (fields) - здесь томаты!
+        # 🔧 ВАЖНО: Добавляем поля (fields) - здесь семена!
         for field in embed.get('fields', []):
             field_name = field.get('name', '')
             field_value = field.get('value', '')
@@ -334,7 +412,7 @@ def format_ember_message(message):
 
 def check_ember_messages(messages):
     """Проверяет сообщения от Ember бота"""
-    global last_processed_id, bot_status, last_error, processed_messages_cache
+    global last_processed_id, bot_status, last_error, processed_messages_cache, found_seeds_count
     
     if not messages:
         return False
@@ -342,7 +420,7 @@ def check_ember_messages(messages):
     try:
         messages.sort(key=lambda x: x['id'], reverse=True)
         
-        found_tomato = False
+        found_any_seed = False
         newest_id = messages[0]['id']
         
         if last_processed_id is None:
@@ -377,7 +455,7 @@ def check_ember_messages(messages):
                 # Добавляем в кэш обработанных
                 processed_messages_cache.add(message_id)
                 
-                # Ищем томаты в ПОЛНОМ тексте (включая fields)
+                # Ищем семена в ПОЛНОМ тексте (включая fields)
                 full_search_text = extract_all_text_from_message(message)
                 
                 formatted_message = format_ember_message(message)
@@ -391,31 +469,25 @@ def check_ember_messages(messages):
                     )
                     send_to_bot(bot_message)
                     
-                    # 🔍 Проверяем на наличие томата в ПОЛНОМ тексте
+                    # 🔍 Проверяем на наличие всех отслеживаемых семян
                     search_text_lower = full_search_text.lower()
                     
-                    tomato_keywords = ['tomato', 'томат', ':tomato']
-                    found_keyword = None
-                    
-                    for keyword in tomato_keywords:
-                        if keyword in search_text_lower:
-                            found_keyword = keyword
-                            break
-                    
-                    if found_keyword:
-                        logger.info(f"🎯 ОБНАРУЖЕН ТОМАТ! Ключевое слово: '{found_keyword}'")
-                        
-                        # 📢 В КАНАЛ - ТОЛЬКО СТИКЕР (без текста)
-                        tomato_sticker_id = "CAACAgIAAxkBAAEPszZpCfLc2HlDxyNpkHpQmxlBl94iwQACjYEAApqASUgobiA_uUJNkzYE"
-                        
-                        if send_to_channel(sticker_id=tomato_sticker_id):
-                            logger.info("✅ Стикер о томате отправлен в канал!")
-                        found_tomato = True
+                    for seed_name, seed_config in TARGET_SEEDS.items():
+                        for keyword in seed_config['keywords']:
+                            if keyword in search_text_lower:
+                                found_seeds_count[seed_name] += 1
+                                logger.info(f"🎯 ОБНАРУЖЕН {seed_name.upper()}! Ключевое слово: '{keyword}'")
+                                
+                                # 📢 В КАНАЛ - ТОЛЬКО СТИКЕР (без текста)
+                                if send_to_channel(sticker_id=seed_config['sticker_id']):
+                                    logger.info(f"✅ Стикер о {seed_name} отправлен в канал!")
+                                found_any_seed = True
+                                break  # Переходим к следующему семени
         
         last_processed_id = newest_id
         bot_status = "🟢 Работает нормально"
         last_error = None
-        return found_tomato
+        return found_any_seed
         
     except Exception as e:
         error_msg = f"Ошибка обработки сообщений: {e}"
@@ -437,10 +509,10 @@ def monitor_discord():
             messages = get_discord_messages()
             
             if messages is not None:
-                found_tomato = check_ember_messages(messages)
+                found_any_seed = check_ember_messages(messages)
                 
-                if found_tomato:
-                    logger.info("✅ Стикер о томате отправлен в канал!")
+                if found_any_seed:
+                    logger.info("✅ Стикер о семенах отправлен в канал!")
                 
                 error_count = 0
             else:
@@ -461,26 +533,39 @@ def monitor_discord():
             time.sleep(60)
 
 def health_monitor():
-    """Мониторинг здоровья бота"""
-    logger.info("❤️ Запускаю монитор здоровья...")
+    """Мониторинг здоровья бота - отправляет статус каждые 5 часов"""
+    logger.info("❤️ Запускаю монитор здоровья (каждые 5 часов)...")
+    
+    # Счетчик отчетов
+    report_count = 0
+    
     while True:
         try:
-            # Отправляем статус каждые 12 часов ТОЛЬКО В БОТА
-            time.sleep(43200)  # 12 часов
+            # Отправляем статус каждые 5 часов
+            time.sleep(18000)  # 5 часов = 18000 секунд
             
+            report_count += 1
             uptime = datetime.now() - startup_time
             hours = uptime.total_seconds() / 3600
             
+            # Собираем статистику по семенам
+            seeds_stats = "\n".join([f"{TARGET_SEEDS[name]['emoji']} {name.capitalize()}: {count} раз" 
+                                   for name, count in found_seeds_count.items()])
+            
             status_report = (
-                f"📊 <b>Авто-статус</b>\n"
+                f"📊 <b>Авто-статус #{report_count}</b>\n"
                 f"⏰ Работает: {hours:.1f} часов\n"
                 f"📢 Канал: {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}\n"
                 f"🔄 {bot_status}\n"
+                f"🏓 Самопинг: {ping_count} раз\n"
+                f"📝 Сообщений обработано: {len(processed_messages_cache)}\n\n"
+                f"🎯 <b>Найдено семян:</b>\n"
+                f"{seeds_stats}\n\n"
                 f"✅ Бот стабильно работает"
             )
             
             send_to_bot(status_report)
-            logger.info("📊 Авто-статус отправлен в бота")
+            logger.info(f"📊 Авто-статус #{report_count} отправлен в бота")
             
         except Exception as e:
             logger.error(f"❌ Ошибка отправки авто-статуса: {e}")
@@ -489,6 +574,9 @@ def health_monitor():
 def home():
     uptime = datetime.now() - startup_time
     hours = uptime.total_seconds() / 3600
+    
+    # Собираем список отслеживаемых семян
+    seeds_list = ", ".join([f"{config['emoji']} {name.capitalize()}" for name, config in TARGET_SEEDS.items()])
     
     return f"""
     <html>
@@ -504,13 +592,16 @@ def home():
             </style>
         </head>
         <body>
-            <h1>🍅 Умный мониторинг томатов</h1>
+            <h1>🌱 Умный мониторинг семян</h1>
             
             <div class="status">
                 <h3>📊 Статус системы</h3>
                 <div class="info"><strong>Состояние:</strong> {bot_status}</div>
                 <div class="info"><strong>Время работы:</strong> {hours:.1f} часов</div>
                 <div class="info"><strong>Канал:</strong> {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}</div>
+                <div class="info"><strong>Самопинг:</strong> 🏓 {ping_count} раз</div>
+                <div class="info"><strong>Авто-статус:</strong> 📊 Каждые 5 часов</div>
+                <div class="info"><strong>Отслеживаю:</strong> {seeds_list}</div>
                 <div class="info"><strong>Последнее сообщение:</strong> {last_processed_id or 'Еще не проверял'}</div>
             </div>
             
@@ -524,7 +615,10 @@ def home():
             <div class="commands">
                 <h3>🤖 Логика работы</h3>
                 <p>📱 <strong>Вам в бота:</strong> Все стоки от Ember</p>
-                <p>📢 <strong>В канал:</strong> Только стикер при томате</p>
+                <p>📢 <strong>В канал:</strong> Только стикеры при редких семенах</p>
+                <p>🎯 <strong>Отслеживаю:</strong> {seeds_list}</p>
+                <p>🏓 <strong>Самопинг:</strong> Каждые 8 минут</p>
+                <p>📊 <strong>Авто-статус:</strong> Каждые 5 часов</p>
                 <p>🚫 <strong>НЕТ уведомлений в канале</strong> о запуске/ошибках</p>
             </div>
         </body>
@@ -540,7 +634,7 @@ def enable_channel():
         <head><title>Канал включен</title></head>
         <body>
             <h2>✅ Канал включен</h2>
-            <p>Уведомления о томатах (стикеры) снова будут приходить в канал.</p>
+            <p>Уведомления о семенах (стикеры) снова будут приходить в канал.</p>
             <a href="/">← Назад к панели управления</a>
         </body>
     </html>
@@ -555,7 +649,7 @@ def disable_channel():
         <head><title>Канал выключен</title></head>
         <body>
             <h2>⏸️ Канал выключен</h2>
-            <p>Уведомления о томатах (стикеры) временно приостановлены.</p>
+            <p>Уведомления о семенах (стикеры) временно приостановлены.</p>
             <a href="/">← Назад к панели управления</a>
         </body>
     </html>
@@ -566,6 +660,10 @@ def status_page():
     uptime = datetime.now() - startup_time
     hours = uptime.total_seconds() / 3600
     
+    # Собираем статистику по семенам
+    seeds_stats = "\n".join([f"{TARGET_SEEDS[name]['emoji']} {name.capitalize()}: {found_seeds_count[name]} раз" 
+                           for name in TARGET_SEEDS.keys()])
+    
     status_html = f"""
     <html>
         <head><title>Статус бота</title></head>
@@ -575,6 +673,9 @@ def status_page():
             <p><strong>Время работы:</strong> {hours:.1f} часов</p>
             <p><strong>Запущен:</strong> {startup_time.strftime('%d.%m.%Y %H:%M:%S')}</p>
             <p><strong>Канал:</strong> {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}</p>
+            <p><strong>Самопинг:</strong> 🏓 {ping_count} раз</p>
+            <p><strong>Авто-статус:</strong> 📊 Каждые 5 часов</p>
+            <p><strong>Найдено семян:</strong><br>{seeds_stats.replace(chr(10), '<br>')}</p>
             <p><strong>Последнее сообщение:</strong> {last_processed_id or 'Еще не проверял'}</p>
             {"<p><strong>Последняя ошибка:</strong> " + last_error + "</p>" if last_error else ""}
             <a href="/">← Назад к панели управления</a>
@@ -600,7 +701,8 @@ def start_background_threads():
     threads = [
         threading.Thread(target=monitor_discord, daemon=True),
         threading.Thread(target=telegram_poller_safe, daemon=True),
-        threading.Thread(target=health_monitor, daemon=True)
+        threading.Thread(target=health_monitor, daemon=True),
+        threading.Thread(target=self_pinger, daemon=True)
     ]
     
     for thread in threads:
@@ -610,27 +712,37 @@ def start_background_threads():
     return threads
 
 if __name__ == '__main__':
-    logger.info("🚀 ЗАПУСК БОТА СО СТИКЕРАМИ!")
+    # Собираем список отслеживаемых семян для логов
+    seeds_list = ", ".join([f"{config['emoji']} {name}" for name, config in TARGET_SEEDS.items()])
+    
+    logger.info("🚀 ЗАПУСК БОТА С МУЛЬТИ-СЕМЕНАМИ!")
     logger.info("📱 Вам в бота: ВСЕ стоки от Ember")
-    logger.info("📢 В канал: ТОЛЬКО стикер при томате")
-    logger.info("🎯 Стикер ID: CAACAgIAAxkBAAEPszZpCfLc2HlDxyNpkHpQmxlBl94iwQACjYEAApqASUgobiA_uUJNkzYE")
+    logger.info("📢 В канал: ТОЛЬКО стикеры при редких семенах")
+    logger.info(f"🎯 Отслеживаю: {seeds_list}")
+    logger.info("🏓 Самопинг: Активен (каждые 8 минут)")
+    logger.info("📊 Авто-статус: Каждые 5 часов")
     
     # Запускаем фоновые потоки
     start_background_threads()
     
     # 📱 ТОЛЬКО В БОТА
+    seeds_list_bot = "\n".join([f"{config['emoji']} {name.capitalize()}" for name, config in TARGET_SEEDS.items()])
+    
     startup_msg_bot = (
-        "🚀 <b>Бот запущен со стикерами!</b>\n\n"
-        "📱 <b>Вам в бота:</b> Все стоки от Ember\n"
-        "📢 <b>В канал:</b> Только стикер при томате\n"
-        "🎯 <b>Стикер настроен:</b> Ваш выбранный стикер\n\n"
-        "🎛️ <b>Команды:</b>\n"
-        "/start - Информация\n"
-        "/status - Статус\n" 
-        "/enable - Включить канал\n"
-        "/disable - Выключить канал\n"
-        "/help - Помощь\n\n"
-        "🎯 <b>Чтобы получить ID стикера:</b> Просто отправьте мне стикер!"
+        f"🚀 <b>Бот запущен с мульти-семенами!</b>\n\n"
+        f"📱 <b>Вам в бота:</b> Все стоки от Ember\n"
+        f"📢 <b>В канал:</b> Только стикеры при редких семенах\n"
+        f"🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
+        f"📊 <b>Авто-статус:</b> Каждые 5 часов\n\n"
+        f"🎯 <b>Отслеживаю семена:</b>\n"
+        f"{seeds_list_bot}\n\n"
+        f"🎛️ <b>Команды:</b>\n"
+        f"/start - Информация\n"
+        f"/status - Статус\n" 
+        f"/enable - Включить канал\n"
+        f"/disable - Выключить канал\n"
+        f"/help - Помощь\n\n"
+        f"🎯 <b>Чтобы получить ID стикера:</b> Просто отправьте мне стикер!"
     )
     
     send_to_bot(startup_msg_bot)
