@@ -6,6 +6,7 @@ import logging
 import threading
 from datetime import datetime
 import re
+import html
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -20,7 +21,7 @@ DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 DISCORD_CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')
 RENDER_SERVICE_URL = os.getenv('RENDER_SERVICE_URL', 'https://stock-bot-cj4s.onrender.com')
 
-# Настройки отслеживаемых семян (легко менять!)
+# Настройки отслеживаемых семян
 TARGET_SEEDS = {
     'tomato': {
         'keywords': ['tomato', 'томат', ':tomato'],
@@ -52,7 +53,6 @@ def self_pinger():
     
     logger.info("🔄 Запускаю самопинг...")
     
-    # Ждем немного перед первым пингом, чтобы сервер точно запустился
     time.sleep(30)
     
     while True:
@@ -69,9 +69,8 @@ def self_pinger():
         except Exception as e:
             logger.error(f"❌ Ошибка самопинга: {e}")
         
-        # Пингуем каждые 8 минут (меньше чем 15 минут лимит Render)
         logger.info("💤 Ожидаю 8 минут до следующего самопинга...")
-        time.sleep(480)  # 8 минут
+        time.sleep(480)
 
 def send_telegram_message(chat_id, text, parse_mode="HTML"):
     """Отправляет сообщение в указанный чат/канал"""
@@ -405,31 +404,18 @@ def check_ember_messages(messages):
                 
                 processed_messages_cache.add(message_id)
                 
-                # 🔍 ДЕБАГ: Логируем полную структуру сообщения
-                content = message.get('content', '')
-                embeds = message.get('embeds', [])
-                logger.info(f"📄 Основной текст: '{content}'")
-                
-                if embeds:
-                    for i, embed in enumerate(embeds):
-                        logger.info(f"📊 Embed {i}:")
-                        logger.info(f"   Title: '{embed.get('title')}'")
-                        logger.info(f"   Description: '{embed.get('description')}'")
-                        fields = embed.get('fields', [])
-                        logger.info(f"   Fields count: {len(fields)}")
-                        for j, field in enumerate(fields):
-                            logger.info(f"   Field {j}: name='{field.get('name')}', value='{field.get('value')}'")
-                
-                # 📱 В БОТА - ПОЛНЫЙ ОРИГИНАЛЬНЫЙ ТЕКСТ (без очистки)
+                # 📱 В БОТА - ПОЛНЫЙ ОРИГИНАЛЬНЫЙ ТЕКСТ (без HTML тегов)
                 full_message_text = format_ember_message_for_bot(message)
                 
                 if full_message_text:
+                    # 🔧 ИСПРАВЛЕНИЕ: Убираем parse_mode для обычного текста
                     bot_message = (
-                        f"🛒 <b>Новый сток от Ember</b>\n"
+                        f"🛒 Новый сток от Ember\n"
                         f"⏰ {datetime.now().strftime('%H:%M:%S')}\n\n"
-                        f"<code>{full_message_text}</code>"
+                        f"{full_message_text}"
                     )
-                    send_to_bot(bot_message)
+                    # Отправляем БЕЗ parse_mode
+                    send_telegram_message(TELEGRAM_BOT_CHAT_ID, bot_message, parse_mode=None)
                     
                     # 🔍 Проверяем на наличие всех отслеживаемых семян в ПОЛНОМ тексте
                     full_search_text = extract_all_text_from_message(message)
@@ -457,7 +443,7 @@ def check_ember_messages(messages):
         logger.error(f"💥 {error_msg}")
         bot_status = "🔴 Ошибка обработки"
         last_error = error_msg
-        send_to_bot(f"🚨 <b>Ошибка в мониторинге:</b>\n<code>{error_msg}</code>")
+        send_to_bot(f"🚨 <b>Ошибка в мониторинге:</b>\n<code>{last_error}</code>")
         return False
 
 def monitor_discord():
@@ -532,62 +518,6 @@ def health_monitor():
 
 # ... остальные функции (Flask routes, start_background_threads) остаются без изменений ...
 
-@app.route('/')
-def home():
-    uptime = datetime.now() - startup_time
-    hours = uptime.total_seconds() / 3600
-    
-    seeds_list = ", ".join([f"{config['emoji']} {name.capitalize()}" for name, config in TARGET_SEEDS.items()])
-    
-    return f"""
-    <html>
-        <head>
-            <title>🍅 Tomato Monitor</title>
-            <style>
-                body {{ font-family: Arial, sans-serif; margin: 40px; }}
-                .status {{ background: #f0f8f0; padding: 20px; border-radius: 10px; }}
-                .info {{ margin: 10px 0; }}
-                .commands {{ background: #e3f2fd; padding: 20px; margin: 10px 0; border-radius: 8px; }}
-                .button {{ background: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin: 5px; }}
-                .button-disable {{ background: #f44336; }}
-            </style>
-        </head>
-        <body>
-            <h1>🌱 Умный мониторинг семян</h1>
-            
-            <div class="status">
-                <h3>📊 Статус системы</h3>
-                <div class="info"><strong>Состояние:</strong> {bot_status}</div>
-                <div class="info"><strong>Время работы:</strong> {hours:.1f} часов</div>
-                <div class="info"><strong>Канал:</strong> {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}</div>
-                <div class="info"><strong>Самопинг:</strong> 🏓 {ping_count} раз</div>
-                <div class="info"><strong>Авто-статус:</strong> 📊 Каждые 5 часов</div>
-                <div class="info"><strong>Отслеживаю:</strong> {seeds_list}</div>
-                <div class="info"><strong>Последнее сообщение:</strong> {last_processed_id or 'Еще не проверял'}</div>
-            </div>
-            
-            <div class="commands">
-                <h3>🎛️ Управление</h3>
-                <a href="/enable_channel" class="button">✅ Включить канал</a>
-                <a href="/disable_channel" class="button button-disable">⏸️ Выключить канал</a>
-                <a href="/status" class="button">📊 Статус</a>
-            </div>
-            
-            <div class="commands">
-                <h3>🤖 Логика работы</h3>
-                <p>📱 <strong>Вам в бота:</strong> Все стоки от Ember (ПОЛНЫЙ ТЕКСТ)</p>
-                <p>📢 <strong>В канал:</strong> Только стикеры при редких семенах</p>
-                <p>🎯 <strong>Отслеживаю:</strong> {seeds_list}</p>
-                <p>🏓 <strong>Самопинг:</strong> Каждые 8 минут</p>
-                <p>📊 <strong>Авто-статус:</strong> Каждые 5 часов</p>
-                <p>🚫 <strong>НЕТ уведомлений в канале</strong> о запуске/ошибках</p>
-            </div>
-        </body>
-    </html>
-    """
-
-# ... остальные Flask routes без изменений ...
-
 def start_background_threads():
     logger.info("🔄 Запускаю фоновые потоки...")
     
@@ -607,8 +537,8 @@ def start_background_threads():
 if __name__ == '__main__':
     seeds_list = ", ".join([f"{config['emoji']} {name}" for name, config in TARGET_SEEDS.items()])
     
-    logger.info("🚀 ЗАПУСК БОТА С ПОЛНЫМ ТЕКСТОМ!")
-    logger.info("📱 Вам в бота: ВСЕ стоки от Ember (ПОЛНЫЙ ТЕКСТ)")
+    logger.info("🚀 ЗАПУСК ИСПРАВЛЕННОГО БОТА!")
+    logger.info("📱 Вам в бота: ВСЕ стоки от Ember (ПОЛНЫЙ ТЕКСТ БЕЗ HTML)")
     logger.info("📢 В канал: ТОЛЬКО стикеры при редких семенах")
     logger.info(f"🎯 Отслеживаю: {seeds_list}")
     logger.info("🏓 Самопинг: Активен (каждые 8 минут)")
@@ -619,7 +549,7 @@ if __name__ == '__main__':
     seeds_list_bot = "\n".join([f"{config['emoji']} {name.capitalize()}" for name, config in TARGET_SEEDS.items()])
     
     startup_msg_bot = (
-        f"🚀 <b>Бот запущен с полным текстом!</b>\n\n"
+        f"🚀 <b>Бот запущен с исправлениями!</b>\n\n"
         f"📱 <b>Вам в бота:</b> Все стоки от Ember (ПОЛНЫЙ ТЕКСТ)\n"
         f"📢 <b>В канал:</b> Только стикеры при редких семенах\n"
         f"🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
