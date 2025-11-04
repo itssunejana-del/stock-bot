@@ -22,6 +22,7 @@ DISCORD_CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')
 last_processed_id = None
 startup_time = datetime.now()
 channel_enabled = True  # Флаг включения/выключения канала
+command_queue = []  # Очередь команд от пользователя
 
 def send_telegram_message(chat_id, text, parse_mode="HTML"):
     """Отправляет сообщение в указанный чат/канал"""
@@ -60,34 +61,52 @@ def send_to_bot(text):
     """Отправляет сообщение в ТЕЛЕГРАМ БОТА"""
     return send_telegram_message(TELEGRAM_BOT_CHAT_ID, text)
 
-def send_control_buttons(chat_id):
-    """Отправляет кнопки управления"""
-    keyboard = {
-        "inline_keyboard": [
-            [
-                {"text": "✅ ВКЛЮЧИТЬ канал", "callback_data": "enable_channel"},
-                {"text": "⏸️ ВЫКЛЮЧИТЬ канал", "callback_data": "disable_channel"}
-            ],
-            [
-                {"text": "🔄 СТАТУС", "callback_data": "status"},
-                {"text": "🔍 ПРОВЕРИТЬ СЕЙЧАС", "callback_data": "check_now"}
-            ]
-        ]
-    }
+def process_commands():
+    """Обрабатывает команды из очереди"""
+    global channel_enabled
     
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        data = {
-            "chat_id": chat_id,
-            "text": "🎛️ <b>Панель управления ботом</b>\nВыберите действие:",
-            "parse_mode": "HTML",
-            "reply_markup": keyboard
-        }
-        response = requests.post(url, json=data, timeout=10)
-        return response.status_code == 200
-    except Exception as e:
-        logger.error(f"❌ Ошибка отправки кнопок: {e}")
-        return False
+    while True:
+        try:
+            if command_queue:
+                command = command_queue.pop(0)
+                chat_id = command['chat_id']
+                text = command['text']
+                
+                if text == '/start' or text == '/help':
+                    welcome_msg = (
+                        "🎛️ <b>Панель управления мониторингом</b>\n\n"
+                        "🤖 <b>Доступные команды:</b>\n"
+                        "/enable - ✅ ВКЛЮЧИТЬ канал\n"
+                        "/disable - ⏸️ ВЫКЛЮЧИТЬ канал\n"
+                        "/status - 📊 Статус бота\n"
+                        "/check - 🔍 Проверить сейчас\n"
+                        "/help - ℹ️ Помощь\n\n"
+                        f"📢 Канал: <b>{'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}</b>"
+                    )
+                    send_telegram_message(chat_id, welcome_msg)
+                    
+                elif text == '/enable':
+                    channel_enabled = True
+                    send_telegram_message(chat_id, "✅ <b>Канал ВКЛЮЧЕН</b>\nУведомления о томатах будут приходить в канал")
+                    
+                elif text == '/disable':
+                    channel_enabled = False
+                    send_telegram_message(chat_id, "⏸️ <b>Канал ВЫКЛЮЧЕН</b>\nУведомления о томатах НЕ будут приходить в канал")
+                    
+                elif text == '/status':
+                    send_status(chat_id)
+                    
+                elif text == '/check':
+                    send_telegram_message(chat_id, "🔍 <b>Проверяю сообщения...</b>")
+                    # Принудительная проверка будет выполнена в основном цикле
+                    
+                else:
+                    send_telegram_message(chat_id, "❌ Неизвестная команда. Используйте /help для списка команд")
+                    
+        except Exception as e:
+            logger.error(f"❌ Ошибка обработки команды: {e}")
+        
+        time.sleep(1)
 
 def get_discord_messages():
     """Получает сообщения из Discord канала"""
@@ -149,7 +168,6 @@ def check_ember_messages(messages):
         last_processed_id = newest_id
         logger.info(f"🚀 Первый запуск. Запомнил сообщение: {last_processed_id}")
         send_to_bot("🚀 <b>Бот запущен и начал мониторинг!</b>")
-        send_control_buttons(TELEGRAM_BOT_CHAT_ID)
         return False
     
     # Проверяем только сообщения новее последнего обработанного
@@ -197,63 +215,6 @@ def check_ember_messages(messages):
     last_processed_id = newest_id
     
     return found_tomato
-
-def handle_telegram_command(update):
-    """Обрабатывает команды из Telegram"""
-    try:
-        if 'message' in update:
-            message = update['message']
-            chat_id = message['chat']['id']
-            text = message.get('text', '')
-            
-            if text == '/start':
-                welcome_msg = (
-                    "🎛️ <b>Панель управления мониторингом</b>\n\n"
-                    "🤖 <b>Бот отслеживает:</b>\n"
-                    "• Все сообщения Ember в Discord\n"
-                    "• Наличие томатов в стоках\n\n"
-                    "📢 <b>Канал:</b> Уведомления о томатах\n"
-                    "🤖 <b>Этот бот:</b> Все сообщения + управление\n\n"
-                    "Используйте кнопки ниже для управления:"
-                )
-                send_telegram_message(chat_id, welcome_msg)
-                send_control_buttons(chat_id)
-                
-            elif text == '/control':
-                send_control_buttons(chat_id)
-                
-            elif text == '/status':
-                send_status(chat_id)
-                
-        elif 'callback_query' in update:
-            callback = update['callback_query']
-            chat_id = callback['message']['chat']['id']
-            data = callback['data']
-            
-            if data == 'enable_channel':
-                global channel_enabled
-                channel_enabled = True
-                send_telegram_message(chat_id, "✅ <b>Канал ВКЛЮЧЕН</b>\nУведомления о томатах будут приходить в канал")
-                send_control_buttons(chat_id)
-                
-            elif data == 'disable_channel':
-                channel_enabled = False
-                send_telegram_message(chat_id, "⏸️ <b>Канал ВЫКЛЮЧЕН</b>\nУведомления о томатах НЕ будут приходить в канал")
-                send_control_buttons(chat_id)
-                
-            elif data == 'status':
-                send_status(chat_id)
-                
-            elif data == 'check_now':
-                send_telegram_message(chat_id, "🔍 <b>Проверяю сообщения...</b>")
-                messages = get_discord_messages()
-                if messages:
-                    found = check_ember_messages(messages)
-                    status = "🎯 Томат найден!" if found else "🔍 Томатов нет"
-                    send_telegram_message(chat_id, f"✅ <b>Проверка завершена</b>\n{status}")
-                
-    except Exception as e:
-        logger.error(f"❌ Ошибка обработки команды: {e}")
 
 def send_status(chat_id):
     """Отправляет статус бота"""
@@ -330,6 +291,44 @@ def health_check():
         
         time.sleep(3600)  # Проверяем каждый час
 
+def check_telegram_commands():
+    """Проверяет новые сообщения от пользователя"""
+    last_update_id = 0
+    
+    while True:
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+            params = {
+                'offset': last_update_id + 1,
+                'timeout': 30
+            }
+            
+            response = requests.get(url, params=params, timeout=35)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data['ok'] and data['result']:
+                    for update in data['result']:
+                        last_update_id = update['update_id']
+                        
+                        if 'message' in update:
+                            message = update['message']
+                            chat_id = message['chat']['id']
+                            text = message.get('text', '')
+                            
+                            # Добавляем команду в очередь
+                            command_queue.append({
+                                'chat_id': chat_id,
+                                'text': text
+                            })
+                            logger.info(f"📨 Получена команда: {text} от {chat_id}")
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка проверки команд: {e}")
+            time.sleep(10)
+        
+        time.sleep(1)
+
 @app.route('/')
 def home():
     uptime = datetime.now() - startup_time
@@ -343,8 +342,7 @@ def home():
                 body {{ font-family: Arial, sans-serif; margin: 40px; }}
                 .status {{ background: #f0f8f0; padding: 20px; border-radius: 10px; }}
                 .info {{ margin: 10px 0; }}
-                .channel {{ background: #e3f2fd; padding: 15px; margin: 10px 0; border-radius: 8px; }}
-                .bot {{ background: #f3e5f5; padding: 15px; margin: 10px 0; border-radius: 8px; }}
+                .commands {{ background: #e3f2fd; padding: 20px; margin: 10px 0; border-radius: 8px; }}
             </style>
         </head>
         <body>
@@ -358,23 +356,16 @@ def home():
                 <div class="info"><strong>Последнее сообщение:</strong> {last_processed_id or 'Еще не проверял'}</div>
             </div>
             
-            <p><a href="/control">Панель управления</a> | <a href="/status">Статус</a></p>
-        </body>
-    </html>
-    """
-
-@app.route('/control')
-def control_panel():
-    """Веб-панель управления"""
-    return f"""
-    <html>
-        <head><title>Панель управления</title></head>
-        <body>
-            <h1>🎛️ Панель управления</h1>
-            <p>Канал: <strong>{'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}</strong></p>
-            <button onclick="fetch('/enable_channel')">✅ Включить канал</button>
-            <button onclick="fetch('/disable_channel')">⏸️ Выключить канал</button>
-            <p><a href="/">На главную</a></p>
+            <div class="commands">
+                <h3>🤖 Команды для Telegram бота:</h3>
+                <p><code>/start</code> - Панель управления</p>
+                <p><code>/enable</code> - ✅ Включить канал</p>
+                <p><code>/disable</code> - ⏸️ Выключить канал</p>
+                <p><code>/status</code> - 📊 Статус бота</p>
+                <p><code>/check</code> - 🔍 Проверить сейчас</p>
+            </div>
+            
+            <p><a href="/enable_channel">✅ Включить канал</a> | <a href="/disable_channel">⏸️ Выключить канал</a></p>
         </body>
     </html>
     """
@@ -383,48 +374,40 @@ def control_panel():
 def enable_channel():
     global channel_enabled
     channel_enabled = True
-    return "✅ Канал включен"
+    return "✅ Канал включен. Сообщения снова будут приходить в канал."
 
 @app.route('/disable_channel')
 def disable_channel():
     global channel_enabled
     channel_enabled = False
-    return "⏸️ Канал выключен"
+    return "⏸️ Канал выключен. Сообщения НЕ будут приходить в канал."
 
-@app.route('/telegram', methods=['POST'])
-def telegram_webhook():
-    """Webhook для Telegram команд"""
-    try:
-        update = request.get_json()
-        handle_telegram_command(update)
-        return 'OK'
-    except Exception as e:
-        logger.error(f"❌ Ошибка webhook: {e}")
-        return 'ERROR'
-
-# Запускаем мониторинг
+# Запускаем все потоки
 threading.Thread(target=monitor_discord, daemon=True).start()
 threading.Thread(target=health_check, daemon=True).start()
+threading.Thread(target=check_telegram_commands, daemon=True).start()
+threading.Thread(target=process_commands, daemon=True).start()
 
 if __name__ == '__main__':
-    logger.info("🚀 ЗАПУСК БОТА С ПАНЕЛЬЮ УПРАВЛЕНИЯ!")
+    logger.info("🚀 ЗАПУСК БОТА С ТЕКСТОВЫМИ КОМАНДАМИ!")
     logger.info("📢 Канал: Уведомления о томатах")
     logger.info("🤖 Бот: Все сообщения + управление")
-    logger.info("🎛️ Кнопки: Включить/выключить канал")
+    logger.info("⌨️ Команды: /start, /enable, /disable, /status, /check")
     
     # Отправляем сообщения о запуске
     startup_msg_channel = "🚀 <b>Мониторинг запущен!</b>\n📢 Канал активен и готов к работе"
     startup_msg_bot = (
-        "🚀 <b>Бот запущен с панелью управления!</b>\n\n"
+        "🚀 <b>Бот запущен с текстовыми командами!</b>\n\n"
         "🎛️ <b>Доступные команды:</b>\n"
         "/start - Панель управления\n"
-        "/control - Кнопки управления\n" 
-        "/status - Статус бота\n\n"
-        "📢 <b>Канал можно включать/выключать</b> через кнопки"
+        "/enable - ✅ Включить канал\n"
+        "/disable - ⏸️ Выключить канал\n"
+        "/status - 📊 Статус бота\n"
+        "/check - 🔍 Проверить сейчас\n\n"
+        f"📢 Канал: <b>{'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}</b>"
     )
     
     send_to_channel(startup_msg_channel)
     send_to_bot(startup_msg_bot)
-    send_control_buttons(TELEGRAM_BOT_CHAT_ID)
     
     app.run(host='0.0.0.0', port=5000)
