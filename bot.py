@@ -21,12 +21,12 @@ DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 DISCORD_CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')
 RENDER_SERVICE_URL = os.getenv('RENDER_SERVICE_URL', 'https://stock-bot-cj4s.onrender.com')
 
-# 🆕 ОБНОВЛЕННЫЕ настройки отслеживаемых семян
+# 🆕 ИСПРАВЛЕННЫЕ настройки отслеживаемых семян
 TARGET_SEEDS = {
     'trinity_fruit': {
         'keywords': ['trinity fruit', 'trinityfruit', ':trinityfruit'],
         'sticker_id': "CAACAgIAAxkBAAEPszZpCfLc2HlDxyNpkHpQmxlBl94iwQACjYEAApqASUgobiA_uUJNkzYE",
-        'emoji': '🍅',
+        'emoji': '🔺',  # 🆕 ИЗМЕНИЛ эмодзи
         'display_name': 'Trinity Fruit'
     },
     'crimson_thorn': {
@@ -37,16 +37,15 @@ TARGET_SEEDS = {
     },
     'tomato': {
         'keywords': ['tomato', 'томат', ':tomato'],
-        'sticker_id': "CAACAgIAAxkBAAEPtFBpCrZ_mxXMfMmrjTZkBHN3Tpn9OAACf3sAAoEeWUgkKobs-st7ojYE",
+        'sticker_id': "CAACAgIAAxkBAAEPtFBpCrZ_mxXMfMmrjTZkBHN3Tpn9OAACf3sAAoEeWUgkKobs-st7ojYE",  # 🆕 ПРОВЕРЕННЫЙ стикер
         'emoji': '🍅',
         'display_name': 'Tomato'
     }
 }
 
 # Глобальные переменные
-last_processed_ids = []  # Хранит последние 5 ID сообщений
-CACHE_FILE = 'message_cache.json'
-MAX_CACHE_SIZE = 5
+last_processed_id = None  # 🆕 Хранит только ПОСЛЕДНИЙ обработанный ID
+CACHE_FILE = 'last_processed_id.json'  # 🆕 Переименуем файл
 startup_time = datetime.now()
 channel_enabled = True
 bot_status = "🟢 Работает нормально"
@@ -57,50 +56,30 @@ ping_count = 0
 last_ping_time = None
 found_seeds_count = {name: 0 for name in TARGET_SEEDS.keys()}
 
-def save_message_cache():
-    """Сохраняет кэш сообщений в файл"""
+def save_last_processed_id(message_id):
+    """Сохраняет последний обработанный ID в файл"""
     try:
         with open(CACHE_FILE, 'w') as f:
-            json.dump({'last_processed_ids': last_processed_ids}, f)
-        logger.info(f"💾 Сохранен кэш {len(last_processed_ids)} сообщений")
+            json.dump({'last_processed_id': message_id}, f)
+        logger.info(f"💾 Сохранен last_processed_id: {message_id}")
     except Exception as e:
-        logger.error(f"❌ Ошибка сохранения кэша: {e}")
+        logger.error(f"❌ Ошибка сохранения: {e}")
 
-def load_message_cache():
-    """Загружает кэш сообщений из файла"""
-    global last_processed_ids
+def load_last_processed_id():
+    """Загружает последний обработанный ID из файла"""
     try:
         if os.path.exists(CACHE_FILE):
             with open(CACHE_FILE, 'r') as f:
                 data = json.load(f)
-                last_processed_ids = data.get('last_processed_ids', [])
-                logger.info(f"📂 Загружен кэш {len(last_processed_ids)} сообщений: {last_processed_ids}")
+                last_id = data.get('last_processed_id')
+                logger.info(f"📂 Загружен last_processed_id: {last_id}")
+                return last_id
         else:
-            logger.info("📂 Файл кэша не найден, начинаем с чистого кэша")
-            last_processed_ids = []
+            logger.info("📂 Файл кэша не найден, начинаем с начала")
+            return None
     except Exception as e:
-        logger.error(f"❌ Ошибка загрузки кэша: {e}")
-        last_processed_ids = []
-
-def update_message_cache(new_message_id):
-    """Обновляет кэш сообщений (сохраняет последние 5)"""
-    global last_processed_ids
-    
-    # Добавляем новый ID если его еще нет
-    if new_message_id not in last_processed_ids:
-        last_processed_ids.append(new_message_id)
-        
-        # Держим только последние MAX_CACHE_SIZE сообщений
-        if len(last_processed_ids) > MAX_CACHE_SIZE:
-            last_processed_ids = last_processed_ids[-MAX_CACHE_SIZE:]
-        
-        # Сохраняем в файл
-        save_message_cache()
-        logger.info(f"🆕 Обновлен кэш: {len(last_processed_ids)} сообщений")
-
-def is_message_processed(message_id):
-    """Проверяет, было ли сообщение уже обработано"""
-    return message_id in last_processed_ids
+        logger.error(f"❌ Ошибка загрузки: {e}")
+        return None
 
 def self_pinger():
     """Самопинг чтобы Render не останавливал сервис"""
@@ -231,8 +210,8 @@ def send_bot_status(chat_id):
         f"📢 Канал: {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}\n"
         f"🔄 Отслеживаю: Ember bot\n"
         f"🏓 Самопинг: {ping_count} раз (последний: {last_ping_str})\n"
-        f"💾 Кэш сообщений: {len(last_processed_ids)}/{MAX_CACHE_SIZE}\n"
-        f"📝 Обработано: {len(processed_messages_cache)} сообщений\n\n"
+        f"💾 Последнее сообщение: {last_processed_id or 'Еще не обработано'}\n"
+        f"📝 В памяти: {len(processed_messages_cache)} сообщений\n\n"
         f"🎯 <b>Найдено семян:</b>\n"
         f"{seeds_stats}"
     )
@@ -300,28 +279,24 @@ def handle_telegram_command(chat_id, command, message=None):
         send_telegram_message(chat_id, "❌ Неизвестная команда. Используйте /help для списка команд.")
 
 def telegram_poller_safe():
-    """Безопасный опросщик Telegram с защитой от конфликтов"""
+    """Безопасный опросщик Telegram с защитой от конфликтов - УПРОЩЕННАЯ ВЕРСИЯ"""
     global telegram_offset
     
-    logger.info("🔍 Запускаю безопасный Telegram поллер...")
+    logger.info("🔍 Запускаю УПРОЩЕННЫЙ Telegram поллер...")
+    
+    # Ждем немного чтобы избежать конфликта при старте
+    time.sleep(10)
     
     while True:
         try:
-            try:
-                delete_url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/deleteWebhook"
-                requests.get(delete_url, timeout=5)
-            except:
-                pass
-            
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
             params = {
                 'offset': telegram_offset + 1,
-                'timeout': 30,
+                'timeout': 10,  # Уменьшили таймаут
                 'limit': 1
             }
             
-            logger.info(f"🔄 Проверяю обновления (offset: {telegram_offset})")
-            response = requests.get(url, params=params, timeout=35)
+            response = requests.get(url, params=params, timeout=15)
             
             if response.status_code == 200:
                 data = response.json()
@@ -344,15 +319,16 @@ def telegram_poller_safe():
                                 
                             if text.startswith('/'):
                                 handle_telegram_command(chat_id, text)
-                else:
-                    time.sleep(2)
+                
+                # Увеличиваем паузу между запросами
+                time.sleep(5)
+                
+            elif response.status_code == 409:
+                logger.warning("⚠️ Конфликт с другим экземпляром. Жду 60 секунд...")
+                time.sleep(60)
             else:
-                if response.status_code == 409:
-                    logger.warning("⚠️ Конфликт с другим экземпляром. Жду 30 секунд...")
-                    time.sleep(30)
-                else:
-                    logger.error(f"❌ Ошибка Telegram API: {response.status_code}")
-                    time.sleep(10)
+                logger.error(f"❌ Ошибка Telegram API: {response.status_code}")
+                time.sleep(10)
             
         except requests.exceptions.Timeout:
             continue
@@ -453,8 +429,8 @@ def format_ember_message_for_bot(message):
     return cleaned_text.strip()
 
 def check_ember_messages(messages):
-    """Проверяет сообщения от Ember бота"""
-    global last_processed_ids, bot_status, last_error, processed_messages_cache, found_seeds_count
+    """Проверяет сообщения от Ember бота - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
+    global last_processed_id, bot_status, last_error, processed_messages_cache, found_seeds_count
     
     if not messages:
         return False
@@ -465,16 +441,26 @@ def check_ember_messages(messages):
         found_any_seed = False
         newest_id = messages[0]['id']
         
-        # Загружаем кэш при первом запуске если пустой
-        if not last_processed_ids:
-            load_message_cache()
+        # 🆕 Загружаем last_processed_id при первом запуске
+        if last_processed_id is None:
+            last_processed_id = load_last_processed_id()
+            if last_processed_id:
+                logger.info(f"📂 Начинаем с сообщения после: {last_processed_id}")
+        
+        # Если это первый запуск и нет кэша, начинаем с текущего сообщения
+        if last_processed_id is None:
+            last_processed_id = newest_id
+            save_last_processed_id(newest_id)
+            logger.info(f"🚀 Первый запуск. Запомнил сообщение: {last_processed_id}")
+            send_to_bot("🚀 <b>Бот запущен и начал мониторинг!</b>")
+            return False
         
         for message in messages:
             message_id = message['id']
             
-            # Пропускаем если сообщение уже в нашем кэше
-            if is_message_processed(message_id):
-                logger.info(f"⏩ Пропускаем сообщение из кэша: {message_id}")
+            # 🆕 Пропускаем сообщения которые УЖЕ обработаны (старые)
+            if message_id <= last_processed_id:
+                logger.info(f"⏩ Пропускаем старое сообщение: {message_id} (последний: {last_processed_id})")
                 continue
             
             # Защита от дублирования в оперативной памяти
@@ -489,8 +475,6 @@ def check_ember_messages(messages):
                 
                 # Добавляем в оперативный кэш
                 processed_messages_cache.add(message_id)
-                # Добавляем в постоянный кэш
-                update_message_cache(message_id)
                 
                 # 📱 В БОТА - КРАСИВО ОТФОРМАТИРОВАННЫЙ ТЕКСТ
                 formatted_message = format_ember_message_for_bot(message)
@@ -512,7 +496,7 @@ def check_ember_messages(messages):
                                 # 📢 Отправляем стикер в канал
                                 sticker_sent = send_to_channel(sticker_id=seed_config['sticker_id'])
                                 
-                                # 🆕 Отправляем результат отправки стикера в бота
+                                # Отправляем результат отправки стикера в бота
                                 if sticker_sent:
                                     send_to_bot(f"✅ Стикер {seed_config['emoji']} отправлен в канал")
                                     logger.info(f"✅ Стикер о {seed_name} отправлен в канал!")
@@ -523,7 +507,7 @@ def check_ember_messages(messages):
                                 found_any_seed = True
                                 break
                     
-                    # 🆕 ФОРМАТИРОВАНИЕ СООБЩЕНИЯ В БОТА
+                    # ФОРМАТИРОВАНИЕ СООБЩЕНИЯ В БОТА
                     current_time = datetime.now().strftime('%H:%M:%S')
                     
                     if found_tracked_seeds:
@@ -542,6 +526,12 @@ def check_ember_messages(messages):
                         )
                     
                     send_to_bot(bot_message)
+        
+        # 🆕 Сохраняем САМЫЙ НОВЫЙ ID как обработанный
+        if newest_id > last_processed_id:
+            last_processed_id = newest_id
+            save_last_processed_id(newest_id)
+            logger.info(f"💾 Обновлен last_processed_id: {newest_id}")
         
         bot_status = "🟢 Работает нормально"
         last_error = None
@@ -613,8 +603,8 @@ def health_monitor():
                 f"📢 Канал: {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}\n"
                 f"🔄 {bot_status}\n"
                 f"🏓 Самопинг: {ping_count} раз\n"
-                f"💾 Кэш сообщений: {len(last_processed_ids)}/{MAX_CACHE_SIZE}\n"
-                f"📝 Обработано: {len(processed_messages_cache)} сообщений\n\n"
+                f"💾 Последнее сообщение: {last_processed_id or 'Еще не обработано'}\n"
+                f"📝 В памяти: {len(processed_messages_cache)} сообщений\n\n"
                 f"🎯 <b>Найдено семян:</b>\n"
                 f"{seeds_stats}\n\n"
                 f"✅ Бот стабильно работает"
@@ -655,7 +645,7 @@ def home():
                 <div class="info"><strong>Время работы:</strong> {hours:.1f} часов</div>
                 <div class="info"><strong>Канал:</strong> {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}</div>
                 <div class="info"><strong>Самопинг:</strong> 🏓 {ping_count} раз</div>
-                <div class="info"><strong>Кэш сообщений:</strong> 💾 {len(last_processed_ids)}/{MAX_CACHE_SIZE}</div>
+                <div class="info"><strong>Последнее сообщение:</strong> {last_processed_id or 'Еще не обработано'}</div>
                 <div class="info"><strong>Авто-статус:</strong> 📊 Каждые 5 часов</div>
                 <div class="info"><strong>Отслеживаю:</strong> {seeds_list}</div>
             </div>
@@ -713,13 +703,9 @@ def start_background_threads():
     return threads
 
 if __name__ == '__main__':
-    # Загружаем кэш при запуске
-    load_message_cache()
-    
     seeds_list = ", ".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
     
-    logger.info("🚀 ЗАПУСК БОТА С ОБНОВЛЕННЫМИ СЕМЕНАМИ!")
-    logger.info(f"💾 Размер кэша: {len(last_processed_ids)}/{MAX_CACHE_SIZE} сообщений")
+    logger.info("🚀 ЗАПУСК БОТА С ПРАВИЛЬНЫМ КЭШЕМ!")
     logger.info("📱 Вам в бота: Все стоки от Ember (читабельный текст)")
     logger.info("📢 В канал: Только стикеры при редких семенах")
     logger.info(f"🎯 Отслеживаю: {seeds_list}")
@@ -731,7 +717,7 @@ if __name__ == '__main__':
     seeds_list_bot = "\n".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
     
     startup_msg_bot = (
-        f"🚀 <b>Бот запущен с обновленными семенами!</b>\n\n"
+        f"🚀 <b>Бот запущен с правильным кэшем!</b>\n\n"
         f"📱 <b>Вам в бота:</b> Все стоки от Ember (читабельный текст)\n"
         f"📢 <b>В канал:</b> Только стикеры при редких семенах\n"
         f"🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
