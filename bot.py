@@ -1,6 +1,6 @@
-from flask import Flask, request
-import requests
+import json
 import os
+import requests
 import time
 import logging
 import threading
@@ -35,7 +35,9 @@ TARGET_SEEDS = {
 }
 
 # Глобальные переменные
-last_processed_id = None
+last_processed_ids = []  # 🆕 Хранит последние 5 ID сообщений
+CACHE_FILE = 'message_cache.json'
+MAX_CACHE_SIZE = 5
 startup_time = datetime.now()
 channel_enabled = True
 bot_status = "🟢 Работает нормально"
@@ -45,6 +47,51 @@ telegram_offset = 0
 ping_count = 0
 last_ping_time = None
 found_seeds_count = {'tomato': 0, 'bamboo': 0}
+
+def save_message_cache():
+    """Сохраняет кэш сообщений в файл"""
+    try:
+        with open(CACHE_FILE, 'w') as f:
+            json.dump({'last_processed_ids': last_processed_ids}, f)
+        logger.info(f"💾 Сохранен кэш {len(last_processed_ids)} сообщений")
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения кэша: {e}")
+
+def load_message_cache():
+    """Загружает кэш сообщений из файла"""
+    global last_processed_ids
+    try:
+        if os.path.exists(CACHE_FILE):
+            with open(CACHE_FILE, 'r') as f:
+                data = json.load(f)
+                last_processed_ids = data.get('last_processed_ids', [])
+                logger.info(f"📂 Загружен кэш {len(last_processed_ids)} сообщений: {last_processed_ids}")
+        else:
+            logger.info("📂 Файл кэша не найден, начинаем с чистого кэша")
+            last_processed_ids = []
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки кэша: {e}")
+        last_processed_ids = []
+
+def update_message_cache(new_message_id):
+    """Обновляет кэш сообщений (сохраняет последние 5)"""
+    global last_processed_ids
+    
+    # Добавляем новый ID если его еще нет
+    if new_message_id not in last_processed_ids:
+        last_processed_ids.append(new_message_id)
+        
+        # Держим только последние MAX_CACHE_SIZE сообщений
+        if len(last_processed_ids) > MAX_CACHE_SIZE:
+            last_processed_ids = last_processed_ids[-MAX_CACHE_SIZE:]
+        
+        # Сохраняем в файл
+        save_message_cache()
+        logger.info(f"🆕 Обновлен кэш: {len(last_processed_ids)} сообщений")
+
+def is_message_processed(message_id):
+    """Проверяет, было ли сообщение уже обработано"""
+    return message_id in last_processed_ids
 
 def self_pinger():
     """Самопинг чтобы Render не останавливал сервис"""
@@ -175,7 +222,8 @@ def send_bot_status(chat_id):
         f"📢 Канал: {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}\n"
         f"🔄 Отслеживаю: Ember bot\n"
         f"🏓 Самопинг: {ping_count} раз (последний: {last_ping_str})\n"
-        f"📝 Последнее сообщение: {last_processed_id or 'Еще не проверял'}\n\n"
+        f"💾 Кэш сообщений: {len(last_processed_ids)}/{MAX_CACHE_SIZE}\n"
+        f"📝 Обработано: {len(processed_messages_cache)} сообщений\n\n"
         f"🎯 <b>Найдено семян:</b>\n"
         f"{seeds_stats}"
     )
@@ -213,9 +261,10 @@ def handle_telegram_command(chat_id, command, message=None):
             "🎮 <b>Добро пожаловать!</b>\n\n"
             "Я бот для отслеживания стоков в игре <b>Grow a Garden</b>.\n"
             "Автоматически мониторю Discord канал с ботом Ember и присылаю уведомления о стоках.\n\n"
-            "📱 <b>Вам в личные сообщения:</b> Все стоки от Ember (красиво отформатированные)\n"
+            "📱 <b>Вам в личные сообщения:</b> Все стоки от Ember (читабельный текст)\n"
             "📢 <b>В канал:</b> Только стикеры при редких семенах\n"
             "🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
+            "💾 <b>Умный кэш:</b> Сохраняет состояние между перезапусками\n"
             "📊 <b>Авто-статус:</b> Каждые 5 часов\n\n"
             f"🎯 <b>Отслеживаю семена:</b>\n"
             f"{seeds_list}\n\n"
@@ -396,7 +445,7 @@ def format_ember_message_for_bot(message):
 
 def check_ember_messages(messages):
     """Проверяет сообщения от Ember бота"""
-    global last_processed_id, bot_status, last_error, processed_messages_cache, found_seeds_count
+    global last_processed_ids, bot_status, last_error, processed_messages_cache, found_seeds_count
     
     if not messages:
         return False
@@ -407,22 +456,19 @@ def check_ember_messages(messages):
         found_any_seed = False
         newest_id = messages[0]['id']
         
-        if last_processed_id is None:
-            last_processed_id = newest_id
-            logger.info(f"🚀 Первый запуск. Запомнил сообщение: {last_processed_id}")
-            send_to_bot("🚀 <b>Бот запущен и начал мониторинг!</b>")
-            return False
-        
-        if len(processed_messages_cache) > 100:
-            processed_messages_cache = set()
-            logger.info("🧹 Очистил кэш обработанных сообщений")
+        # Загружаем кэш при первом запуске если пустой
+        if not last_processed_ids:
+            load_message_cache()
         
         for message in messages:
             message_id = message['id']
             
-            if message_id <= last_processed_id:
-                break
+            # 🔧 ВАЖНОЕ ИСПРАВЛЕНИЕ: Пропускаем если сообщение уже в нашем кэше
+            if is_message_processed(message_id):
+                logger.info(f"⏩ Пропускаем сообщение из кэша: {message_id}")
+                continue
             
+            # Защита от дублирования в оперативной памяти
             if message_id in processed_messages_cache:
                 logger.info(f"⏩ Пропускаем уже обработанное сообщение: {message_id}")
                 continue
@@ -432,7 +478,10 @@ def check_ember_messages(messages):
             if 'Ember' in author:
                 logger.info(f"🔍 Новое сообщение от Ember: {message_id}")
                 
+                # Добавляем в оперативный кэш
                 processed_messages_cache.add(message_id)
+                # 🔧 ДОБАВЛЯЕМ В ПОСТОЯННЫЙ КЭШ
+                update_message_cache(message_id)
                 
                 # 📱 В БОТА - КРАСИВО ОТФОРМАТИРОВАННЫЙ ТЕКСТ
                 formatted_message = format_ember_message_for_bot(message)
@@ -445,7 +494,7 @@ def check_ember_messages(messages):
                     )
                     send_to_bot(bot_message)
                     
-                    # 🔍 Проверяем на наличие всех отслеживаемых семян в ПОЛНОМ тексте
+                    # 🔍 Проверяем на наличие всех отслеживаемых семян
                     full_search_text = extract_all_text_from_message(message)
                     search_text_lower = full_search_text.lower()
                     
@@ -455,13 +504,11 @@ def check_ember_messages(messages):
                                 found_seeds_count[seed_name] += 1
                                 logger.info(f"🎯 ОБНАРУЖЕН {seed_name.upper()}! Ключевое слово: '{keyword}'")
                                 
-                                # 📢 В КАНАЛ - ТОЛЬКО СТИКЕР
                                 if send_to_channel(sticker_id=seed_config['sticker_id']):
                                     logger.info(f"✅ Стикер о {seed_name} отправлен в канал!")
                                 found_any_seed = True
                                 break
         
-        last_processed_id = newest_id
         bot_status = "🟢 Работает нормально"
         last_error = None
         return found_any_seed
@@ -473,8 +520,6 @@ def check_ember_messages(messages):
         last_error = error_msg
         send_to_bot(f"🚨 <b>Ошибка в мониторинге:</b>\n<code>{last_error}</code>")
         return False
-
-# ... остальные функции без изменений ...
 
 def monitor_discord():
     """Основная функция мониторинга"""
@@ -534,7 +579,8 @@ def health_monitor():
                 f"📢 Канал: {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}\n"
                 f"🔄 {bot_status}\n"
                 f"🏓 Самопинг: {ping_count} раз\n"
-                f"📝 Сообщений обработано: {len(processed_messages_cache)}\n\n"
+                f"💾 Кэш сообщений: {len(last_processed_ids)}/{MAX_CACHE_SIZE}\n"
+                f"📝 Обработано: {len(processed_messages_cache)} сообщений\n\n"
                 f"🎯 <b>Найдено семян:</b>\n"
                 f"{seeds_stats}\n\n"
                 f"✅ Бот стабильно работает"
@@ -546,7 +592,63 @@ def health_monitor():
         except Exception as e:
             logger.error(f"❌ Ошибка отправки авто-статуса: {e}")
 
-# ... остальные Flask routes и start_background_threads без изменений ...
+# ... Flask routes остаются без изменений ...
+
+@app.route('/')
+def home():
+    uptime = datetime.now() - startup_time
+    hours = uptime.total_seconds() / 3600
+    
+    seeds_list = ", ".join([f"{config['emoji']} {name.capitalize()}" for name, config in TARGET_SEEDS.items()])
+    
+    return f"""
+    <html>
+        <head>
+            <title>🌱 Seed Monitor</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 40px; }}
+                .status {{ background: #f0f8f0; padding: 20px; border-radius: 10px; }}
+                .info {{ margin: 10px 0; }}
+                .commands {{ background: #e3f2fd; padding: 20px; margin: 10px 0; border-radius: 8px; }}
+                .button {{ background: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin: 5px; }}
+                .button-disable {{ background: #f44336; }}
+            </style>
+        </head>
+        <body>
+            <h1>🌱 Умный мониторинг семян</h1>
+            
+            <div class="status">
+                <h3>📊 Статус системы</h3>
+                <div class="info"><strong>Состояние:</strong> {bot_status}</div>
+                <div class="info"><strong>Время работы:</strong> {hours:.1f} часов</div>
+                <div class="info"><strong>Канал:</strong> {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}</div>
+                <div class="info"><strong>Самопинг:</strong> 🏓 {ping_count} раз</div>
+                <div class="info"><strong>Кэш сообщений:</strong> 💾 {len(last_processed_ids)}/{MAX_CACHE_SIZE}</div>
+                <div class="info"><strong>Авто-статус:</strong> 📊 Каждые 5 часов</div>
+                <div class="info"><strong>Отслеживаю:</strong> {seeds_list}</div>
+            </div>
+            
+            <div class="commands">
+                <h3>🎛️ Управление</h3>
+                <a href="/enable_channel" class="button">✅ Включить канал</a>
+                <a href="/disable_channel" class="button button-disable">⏸️ Выключить канал</a>
+                <a href="/status" class="button">📊 Статус</a>
+            </div>
+            
+            <div class="commands">
+                <h3>🤖 Логика работы</h3>
+                <p>📱 <strong>Вам в бота:</strong> Все стоки от Ember (читабельный текст)</p>
+                <p>📢 <strong>В канал:</strong> Только стикеры при редких семенах</p>
+                <p>🎯 <strong>Отслеживаю:</strong> {seeds_list}</p>
+                <p>💾 <strong>Умный кэш:</strong> Сохраняет состояние между перезапусками</p>
+                <p>🏓 <strong>Самопинг:</strong> Каждые 8 минут</p>
+                <p>📊 <strong>Авто-статус:</strong> Каждые 5 часов</p>
+            </div>
+        </body>
+    </html>
+    """
+
+# ... остальные Flask routes без изменений ...
 
 def start_background_threads():
     logger.info("🔄 Запускаю фоновые потоки...")
@@ -565,10 +667,14 @@ def start_background_threads():
     return threads
 
 if __name__ == '__main__':
+    # 🆕 Загружаем кэш при запуске
+    load_message_cache()
+    
     seeds_list = ", ".join([f"{config['emoji']} {name}" for name, config in TARGET_SEEDS.items()])
     
-    logger.info("🚀 ЗАПУСК БОТА С КРАСИВЫМ ФОРМАТИРОВАНИЕМ!")
-    logger.info("📱 Вам в бота: Все стоки от Ember (красиво отформатированные)")
+    logger.info("🚀 ЗАПУСК БОТА С УМНЫМ КЭШЕМ!")
+    logger.info(f"💾 Размер кэша: {len(last_processed_ids)}/{MAX_CACHE_SIZE} сообщений")
+    logger.info("📱 Вам в бота: Все стоки от Ember (читабельный текст)")
     logger.info("📢 В канал: Только стикеры при редких семенах")
     logger.info(f"🎯 Отслеживаю: {seeds_list}")
     logger.info("🏓 Самопинг: Активен (каждые 8 минут)")
@@ -579,10 +685,11 @@ if __name__ == '__main__':
     seeds_list_bot = "\n".join([f"{config['emoji']} {name.capitalize()}" for name, config in TARGET_SEEDS.items()])
     
     startup_msg_bot = (
-        f"🚀 <b>Бот запущен с красивым форматированием!</b>\n\n"
+        f"🚀 <b>Бот запущен с умным кэшем!</b>\n\n"
         f"📱 <b>Вам в бота:</b> Все стоки от Ember (читабельный текст)\n"
         f"📢 <b>В канал:</b> Только стикеры при редких семенах\n"
         f"🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
+        f"💾 <b>Умный кэш:</b> Сохраняет состояние между перезапусками\n"
         f"📊 <b>Авто-статус:</b> Каждые 5 часов\n\n"
         f"🎯 <b>Отслеживаю семена:</b>\n"
         f"{seeds_list_bot}\n\n"
