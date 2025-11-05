@@ -1,11 +1,12 @@
-import json
-import os
+from flask import Flask, request
 import requests
+import os
 import time
 import logging
 import threading
 from datetime import datetime
 import re
+import json
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -20,22 +21,30 @@ DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 DISCORD_CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')
 RENDER_SERVICE_URL = os.getenv('RENDER_SERVICE_URL', 'https://stock-bot-cj4s.onrender.com')
 
-# Настройки отслеживаемых семян
+# 🆕 ОБНОВЛЕННЫЕ настройки отслеживаемых семян
 TARGET_SEEDS = {
+    'trinity_fruit': {
+        'keywords': ['trinity fruit', 'trinityfruit', ':trinityfruit'],
+        'sticker_id': "CAACAgIAAxkBAAEPszZpCfLc2HlDxyNpkHpQmxlBl94iwQACjYEAApqASUgobiA_uUJNkzYE",
+        'emoji': '🍅',
+        'display_name': 'Trinity Fruit'
+    },
+    'crimson_thorn': {
+        'keywords': ['crimson thorn', 'crimsonthorn', ':crimsonthorn'],
+        'sticker_id': "CAACAgIAAxkBAAEPtExpCrIew_M01f5h8MyaGyeMKAABiiEAAvmLAALkoFhIP2bLUVXqoWU2BA",
+        'emoji': '🌵',
+        'display_name': 'Crimson Thorn'
+    },
     'tomato': {
         'keywords': ['tomato', 'томат', ':tomato'],
-        'sticker_id': "CAACAgIAAxkBAAEPszZpCfLc2HlDxyNpkHpQmxlBl94iwQACjYEAApqASUgobiA_uUJNkzYE",
-        'emoji': '🍅'
-    },
-    'bamboo': {
-        'keywords': ['bamboo', 'бамбук', ':bamboo'],
-        'sticker_id': "CAACAgIAAxkBAAEPs0ZpCf9SjVZjllFEZLr2druwSSk0hAACkYcAAuOaaUskfqF4nmGFaDYE",
-        'emoji': '🎍'
+        'sticker_id': "CAACAgIAAxkBAAEPtFBpCrZ_mxXMfMmrjTZkBHN3Tpn9OAACf3sAAoEeWUgkKobs-st7ojYE",
+        'emoji': '🍅',
+        'display_name': 'Tomato'
     }
 }
 
 # Глобальные переменные
-last_processed_ids = []  # 🆕 Хранит последние 5 ID сообщений
+last_processed_ids = []  # Хранит последние 5 ID сообщений
 CACHE_FILE = 'message_cache.json'
 MAX_CACHE_SIZE = 5
 startup_time = datetime.now()
@@ -46,7 +55,7 @@ processed_messages_cache = set()
 telegram_offset = 0
 ping_count = 0
 last_ping_time = None
-found_seeds_count = {'tomato': 0, 'bamboo': 0}
+found_seeds_count = {name: 0 for name in TARGET_SEEDS.keys()}
 
 def save_message_cache():
     """Сохраняет кэш сообщений в файл"""
@@ -186,7 +195,7 @@ def send_to_bot(text):
 
 def send_help_message(chat_id):
     """Отправляет сообщение со списком команд"""
-    seeds_list = "\n".join([f"{config['emoji']} {name.capitalize()}" for name, config in TARGET_SEEDS.items()])
+    seeds_list = "\n".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
     
     help_text = (
         f"🤖 <b>Бот мониторинга Grow a Garden</b>\n\n"
@@ -211,7 +220,7 @@ def send_bot_status(chat_id):
     
     last_ping_str = "Еще не было" if not last_ping_time else last_ping_time.strftime('%H:%M:%S')
     
-    seeds_stats = "\n".join([f"{TARGET_SEEDS[name]['emoji']} {name.capitalize()}: {count} раз" 
+    seeds_stats = "\n".join([f"{TARGET_SEEDS[name]['emoji']} {TARGET_SEEDS[name]['display_name']}: {count} раз" 
                            for name, count in found_seeds_count.items()])
     
     status_text = (
@@ -255,7 +264,7 @@ def handle_telegram_command(chat_id, command, message=None):
         return
     
     if command == '/start':
-        seeds_list = "\n".join([f"{config['emoji']} {name.capitalize()}" for name, config in TARGET_SEEDS.items()])
+        seeds_list = "\n".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
         
         welcome_text = (
             "🎮 <b>Добро пожаловать!</b>\n\n"
@@ -463,7 +472,7 @@ def check_ember_messages(messages):
         for message in messages:
             message_id = message['id']
             
-            # 🔧 ВАЖНОЕ ИСПРАВЛЕНИЕ: Пропускаем если сообщение уже в нашем кэше
+            # Пропускаем если сообщение уже в нашем кэше
             if is_message_processed(message_id):
                 logger.info(f"⏩ Пропускаем сообщение из кэша: {message_id}")
                 continue
@@ -480,34 +489,59 @@ def check_ember_messages(messages):
                 
                 # Добавляем в оперативный кэш
                 processed_messages_cache.add(message_id)
-                # 🔧 ДОБАВЛЯЕМ В ПОСТОЯННЫЙ КЭШ
+                # Добавляем в постоянный кэш
                 update_message_cache(message_id)
                 
                 # 📱 В БОТА - КРАСИВО ОТФОРМАТИРОВАННЫЙ ТЕКСТ
                 formatted_message = format_ember_message_for_bot(message)
                 
                 if formatted_message:
-                    bot_message = (
-                        f"🛒 <b>Новый сток от Ember</b>\n"
-                        f"⏰ {datetime.now().strftime('%H:%M:%S')}\n\n"
-                        f"<code>{formatted_message}</code>"
-                    )
-                    send_to_bot(bot_message)
-                    
                     # 🔍 Проверяем на наличие всех отслеживаемых семян
                     full_search_text = extract_all_text_from_message(message)
                     search_text_lower = full_search_text.lower()
+                    
+                    found_tracked_seeds = []
                     
                     for seed_name, seed_config in TARGET_SEEDS.items():
                         for keyword in seed_config['keywords']:
                             if keyword in search_text_lower:
                                 found_seeds_count[seed_name] += 1
+                                found_tracked_seeds.append(seed_config['display_name'])
                                 logger.info(f"🎯 ОБНАРУЖЕН {seed_name.upper()}! Ключевое слово: '{keyword}'")
                                 
-                                if send_to_channel(sticker_id=seed_config['sticker_id']):
+                                # 📢 Отправляем стикер в канал
+                                sticker_sent = send_to_channel(sticker_id=seed_config['sticker_id'])
+                                
+                                # 🆕 Отправляем результат отправки стикера в бота
+                                if sticker_sent:
+                                    send_to_bot(f"✅ Стикер {seed_config['emoji']} отправлен в канал")
                                     logger.info(f"✅ Стикер о {seed_name} отправлен в канал!")
+                                else:
+                                    send_to_bot(f"❌ Стикер {seed_config['emoji']} не отправлен в канал")
+                                    logger.error(f"❌ Ошибка отправки стикера о {seed_name}")
+                                
                                 found_any_seed = True
                                 break
+                    
+                    # 🆕 ФОРМАТИРОВАНИЕ СООБЩЕНИЯ В БОТА
+                    current_time = datetime.now().strftime('%H:%M:%S')
+                    
+                    if found_tracked_seeds:
+                        # Есть отслеживаемые семена
+                        seeds_str = ", ".join(found_tracked_seeds)
+                        bot_message = (
+                            f"⏰Найдены отслеживаемые семена\n"
+                            f"Сток {current_time}\n\n"
+                            f"<code>{formatted_message}</code>"
+                        )
+                    else:
+                        # Нет отслеживаемых семян
+                        bot_message = (
+                            f"Сток {current_time}\n\n"
+                            f"<code>{formatted_message}</code>"
+                        )
+                    
+                    send_to_bot(bot_message)
         
         bot_status = "🟢 Работает нормально"
         last_error = None
@@ -570,7 +604,7 @@ def health_monitor():
             uptime = datetime.now() - startup_time
             hours = uptime.total_seconds() / 3600
             
-            seeds_stats = "\n".join([f"{TARGET_SEEDS[name]['emoji']} {name.capitalize()}: {count} раз" 
+            seeds_stats = "\n".join([f"{TARGET_SEEDS[name]['emoji']} {TARGET_SEEDS[name]['display_name']}: {count} раз" 
                                    for name, count in found_seeds_count.items()])
             
             status_report = (
@@ -592,14 +626,12 @@ def health_monitor():
         except Exception as e:
             logger.error(f"❌ Ошибка отправки авто-статуса: {e}")
 
-# ... Flask routes остаются без изменений ...
-
 @app.route('/')
 def home():
     uptime = datetime.now() - startup_time
     hours = uptime.total_seconds() / 3600
     
-    seeds_list = ", ".join([f"{config['emoji']} {name.capitalize()}" for name, config in TARGET_SEEDS.items()])
+    seeds_list = ", ".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
     
     return f"""
     <html>
@@ -648,7 +680,21 @@ def home():
     </html>
     """
 
-# ... остальные Flask routes без изменений ...
+@app.route('/enable_channel')
+def enable_channel():
+    global channel_enabled
+    channel_enabled = True
+    return "✅ Уведомления в канал ВКЛЮЧЕНЫ"
+
+@app.route('/disable_channel')
+def disable_channel():
+    global channel_enabled
+    channel_enabled = False
+    return "⏸️ Уведомления в канал ВЫКЛЮЧЕНЫ"
+
+@app.route('/status')
+def status_page():
+    return home()
 
 def start_background_threads():
     logger.info("🔄 Запускаю фоновые потоки...")
@@ -667,12 +713,12 @@ def start_background_threads():
     return threads
 
 if __name__ == '__main__':
-    # 🆕 Загружаем кэш при запуске
+    # Загружаем кэш при запуске
     load_message_cache()
     
-    seeds_list = ", ".join([f"{config['emoji']} {name}" for name, config in TARGET_SEEDS.items()])
+    seeds_list = ", ".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
     
-    logger.info("🚀 ЗАПУСК БОТА С УМНЫМ КЭШЕМ!")
+    logger.info("🚀 ЗАПУСК БОТА С ОБНОВЛЕННЫМИ СЕМЕНАМИ!")
     logger.info(f"💾 Размер кэша: {len(last_processed_ids)}/{MAX_CACHE_SIZE} сообщений")
     logger.info("📱 Вам в бота: Все стоки от Ember (читабельный текст)")
     logger.info("📢 В канал: Только стикеры при редких семенах")
@@ -682,10 +728,10 @@ if __name__ == '__main__':
     
     start_background_threads()
     
-    seeds_list_bot = "\n".join([f"{config['emoji']} {name.capitalize()}" for name, config in TARGET_SEEDS.items()])
+    seeds_list_bot = "\n".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
     
     startup_msg_bot = (
-        f"🚀 <b>Бот запущен с умным кэшем!</b>\n\n"
+        f"🚀 <b>Бот запущен с обновленными семенами!</b>\n\n"
         f"📱 <b>Вам в бота:</b> Все стоки от Ember (читабельный текст)\n"
         f"📢 <b>В канал:</b> Только стикеры при редких семенах\n"
         f"🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
