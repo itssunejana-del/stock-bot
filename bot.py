@@ -15,13 +15,13 @@ app = Flask(__name__)
 
 # Токены и ID
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-TELEGRAM_CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')
+TELEGRAM_CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')  # 🆕 ОСНОВНОЙ КАНАЛ
 TELEGRAM_BOT_CHAT_ID = os.getenv('TELEGRAM_BOT_CHAT_ID')
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 DISCORD_CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')
 RENDER_SERVICE_URL = os.getenv('RENDER_SERVICE_URL', 'https://stock-bot-cj4s.onrender.com')
 
-# Настройки отслеживаемых семян
+# 🆕 ФИНАЛЬНЫЕ НАСТРОЙКИ СЕМЯН - ТОЛЬКО РЕДКИЕ
 TARGET_SEEDS = {
     'trinity_fruit': {
         'keywords': ['trinity fruit', 'trinityfruit', ':trinityfruit'],
@@ -34,13 +34,8 @@ TARGET_SEEDS = {
         'sticker_id': "CAACAgIAAxkBAAEPtExpCrIew_M01f5h8MyaGyeMKAABiiEAAvmLAALkoFhIP2bLUVXqoWU2BA",
         'emoji': '🌵',
         'display_name': 'Crimson Thorn'
-    },
-    'tomato': {
-        'keywords': ['tomato', 'томат', ':tomato'],
-        'sticker_id': "CAACAgIAAxkBAAEPtFBpCrZ_mxXMfMmrjTZkBHN3Tpn9OAACf3sAAoEeWUgkKobs-st7ojYE",
-        'emoji': '🍅',
-        'display_name': 'Tomato'
     }
+    # 🆕 ТОМАТЫ УБРАНЫ - добавляйте сюда новые семена при необходимости
 }
 
 # Глобальные переменные
@@ -130,7 +125,7 @@ def send_telegram_message(chat_id, text, parse_mode="HTML"):
             "text": text,
             "parse_mode": parse_mode
         }
-        response = requests.post(url, data=data, timeout=15)  # 🆕 Увеличили таймаут
+        response = requests.post(url, data=data, timeout=15)
         
         if response.status_code == 200:
             logger.info(f"📱 Отправлено в Telegram ({chat_id}): {text[:100]}...")
@@ -154,7 +149,7 @@ def send_telegram_sticker(chat_id, sticker_id):
             "chat_id": chat_id, 
             "sticker": sticker_id
         }
-        response = requests.post(url, data=data, timeout=15)  # 🆕 Увеличили таймаут
+        response = requests.post(url, data=data, timeout=15)
         
         if response.status_code == 200:
             logger.info(f"📱 Отправлен стикер в Telegram ({chat_id})")
@@ -744,7 +739,7 @@ def start_background_threads():
 if __name__ == '__main__':
     seeds_list = ", ".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
     
-    logger.info("🚀 ЗАПУСК БОТА С УЛУЧШЕНИЯМИ ДЛЯ ПРОДАКШЕНА!")
+    logger.info("🚀 ФИНАЛЬНАЯ ВЕРСИЯ ДЛЯ ОСНОВНОГО КАНАЛА!")
     logger.info("📱 Вам в бота: Все стоки от Ember (читабельный текст)")
     logger.info("📢 В канал: Только стикеры при редких семенах")
     logger.info(f"🎯 Отслеживаю: {seeds_list}")
@@ -758,7 +753,7 @@ if __name__ == '__main__':
     seeds_list_bot = "\n".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
     
     startup_msg_bot = (
-        f"🚀 <b>Бот запущен с улучшениями для продакшена!</b>\n\n"
+        f"🚀 <b>ФИНАЛЬНАЯ ВЕРСИЯ ДЛЯ ОСНОВНОГО КАНАЛА!</b>\n\n"
         f"📱 <b>Вам в бота:</b> Все стоки от Ember (читабельный текст)\n"
         f"📢 <b>В канал:</b> Только стикеры при редких семенах\n"
         f"🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
