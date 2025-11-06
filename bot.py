@@ -56,9 +56,6 @@ ping_count = 0
 last_ping_time = None
 found_seeds_count = {name: 0 for name in TARGET_SEEDS.keys()}
 
-# 🆕 ИНИЦИАЛИЗАЦИЯ для защиты от спама
-send_to_channel.last_channel_message_time = 0
-
 def save_last_processed_id(message_id):
     """Сохраняет последний обработанный ID в файл"""
     try:
@@ -180,14 +177,17 @@ def send_to_channel(text=None, sticker_id=None):
         logger.info("⏸️ Канал отключен, сообщение не отправлено")
         return False
     
+    # 🆕 ИНИЦИАЛИЗАЦИЯ ПЕРЕМЕННОЙ ЗАЩИТЫ ОТ СПАМА
+    if not hasattr(send_to_channel, 'last_channel_message_time'):
+        send_to_channel.last_channel_message_time = 0
+    
     # 🆕 ЗАЩИТА ОТ СЛИШКОМ ЧАСТЫХ СООБЩЕНИЙ
     current_time = time.time()
     
-    if hasattr(send_to_channel, 'last_channel_message_time'):
-        time_since_last = current_time - send_to_channel.last_channel_message_time
-        if time_since_last < 2:  # 🆕 Минимум 2 секунды между сообщениями
-            logger.info(f"⏸️ Защита от спама: жду {2-time_since_last:.1f} сек")
-            time.sleep(2 - time_since_last)  # 🆕 Автоматическая пауза
+    time_since_last = current_time - send_to_channel.last_channel_message_time
+    if time_since_last < 2:  # 🆕 Минимум 2 секунды между сообщениями
+        logger.info(f"⏸️ Защита от спама: жду {2-time_since_last:.1f} сек")
+        time.sleep(2 - time_since_last)  # 🆕 Автоматическая пауза
     
     send_to_channel.last_channel_message_time = current_time
         
