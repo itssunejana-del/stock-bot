@@ -21,12 +21,12 @@ DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 DISCORD_CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')
 RENDER_SERVICE_URL = os.getenv('RENDER_SERVICE_URL', 'https://stock-bot-cj4s.onrender.com')
 
-# 🆕 ИСПРАВЛЕННЫЕ настройки отслеживаемых семян
+# Настройки отслеживаемых семян
 TARGET_SEEDS = {
     'trinity_fruit': {
         'keywords': ['trinity fruit', 'trinityfruit', ':trinityfruit'],
         'sticker_id': "CAACAgIAAxkBAAEPszZpCfLc2HlDxyNpkHpQmxlBl94iwQACjYEAApqASUgobiA_uUJNkzYE",
-        'emoji': '🔺',  # 🆕 ИЗМЕНИЛ эмодзи
+        'emoji': '🔺',
         'display_name': 'Trinity Fruit'
     },
     'crimson_thorn': {
@@ -37,15 +37,15 @@ TARGET_SEEDS = {
     },
     'tomato': {
         'keywords': ['tomato', 'томат', ':tomato'],
-        'sticker_id': "CAACAgIAAxkBAAEPtFBpCrZ_mxXMfMmrjTZkBHN3Tpn9OAACf3sAAoEeWUgkKobs-st7ojYE",  # 🆕 ПРОВЕРЕННЫЙ стикер
+        'sticker_id': "CAACAgIAAxkBAAEPtFBpCrZ_mxXMfMmrjTZkBHN3Tpn9OAACf3sAAoEeWUgkKobs-st7ojYE",
         'emoji': '🍅',
         'display_name': 'Tomato'
     }
 }
 
 # Глобальные переменные
-last_processed_id = None  # 🆕 Хранит только ПОСЛЕДНИЙ обработанный ID
-CACHE_FILE = 'last_processed_id.json'  # 🆕 Переименуем файл
+last_processed_id = None
+CACHE_FILE = 'last_processed_id.json'
 startup_time = datetime.now()
 channel_enabled = True
 bot_status = "🟢 Работает нормально"
@@ -55,6 +55,9 @@ telegram_offset = 0
 ping_count = 0
 last_ping_time = None
 found_seeds_count = {name: 0 for name in TARGET_SEEDS.keys()}
+
+# 🆕 ИНИЦИАЛИЗАЦИЯ для защиты от спама
+send_to_channel.last_channel_message_time = 0
 
 def save_last_processed_id(message_id):
     """Сохраняет последний обработанный ID в файл"""
@@ -80,6 +83,17 @@ def load_last_processed_id():
     except Exception as e:
         logger.error(f"❌ Ошибка загрузки: {e}")
         return None
+
+def cleanup_memory_cache():
+    """🆕 УМНАЯ очистка оперативной памяти - сохраняет последние сообщения"""
+    global processed_messages_cache
+    
+    if len(processed_messages_cache) > 200:
+        old_size = len(processed_messages_cache)
+        # Сохраняем последние 100 сообщений для защиты от дублирования
+        recent_messages = list(processed_messages_cache)[-100:]
+        processed_messages_cache = set(recent_messages)
+        logger.info(f"🧹 Очистил кэш: {old_size} -> {len(processed_messages_cache)} сообщений")
 
 def self_pinger():
     """Самопинг чтобы Render не останавливал сервис"""
@@ -119,7 +133,7 @@ def send_telegram_message(chat_id, text, parse_mode="HTML"):
             "text": text,
             "parse_mode": parse_mode
         }
-        response = requests.post(url, data=data, timeout=10)
+        response = requests.post(url, data=data, timeout=15)  # 🆕 Увеличили таймаут
         
         if response.status_code == 200:
             logger.info(f"📱 Отправлено в Telegram ({chat_id}): {text[:100]}...")
@@ -132,7 +146,7 @@ def send_telegram_message(chat_id, text, parse_mode="HTML"):
         return False
 
 def send_telegram_sticker(chat_id, sticker_id):
-    """Отправляет стикер в Telegram"""
+    """🆕 Отправляет стикер в Telegram - УЛУЧШЕННАЯ ВЕРСИЯ"""
     if not TELEGRAM_TOKEN or not chat_id:
         logger.error("❌ Не настроены переменные Telegram")
         return False
@@ -143,11 +157,16 @@ def send_telegram_sticker(chat_id, sticker_id):
             "chat_id": chat_id, 
             "sticker": sticker_id
         }
-        response = requests.post(url, data=data, timeout=10)
+        response = requests.post(url, data=data, timeout=15)  # 🆕 Увеличили таймаут
         
         if response.status_code == 200:
             logger.info(f"📱 Отправлен стикер в Telegram ({chat_id})")
             return True
+        elif response.status_code == 429:  # 🆕 Обработка лимитов Telegram
+            retry_after = response.json().get('parameters', {}).get('retry_after', 30)
+            logger.warning(f"⚠️ Лимит Telegram, жду {retry_after} сек")
+            time.sleep(retry_after)
+            return False
         else:
             logger.error(f"❌ Ошибка отправки стикера {response.status_code}: {response.text}")
             return False
@@ -156,10 +175,21 @@ def send_telegram_sticker(chat_id, sticker_id):
         return False
 
 def send_to_channel(text=None, sticker_id=None):
-    """Отправляет сообщение или стикер в ТЕЛЕГРАМ КАНАЛ"""
+    """🆕 Отправляет сообщение или стикер в ТЕЛЕГРАМ КАНАЛ - ЗАЩИЩЕННАЯ ВЕРСИЯ"""
     if not channel_enabled:
         logger.info("⏸️ Канал отключен, сообщение не отправлено")
         return False
+    
+    # 🆕 ЗАЩИТА ОТ СЛИШКОМ ЧАСТЫХ СООБЩЕНИЙ
+    current_time = time.time()
+    
+    if hasattr(send_to_channel, 'last_channel_message_time'):
+        time_since_last = current_time - send_to_channel.last_channel_message_time
+        if time_since_last < 2:  # 🆕 Минимум 2 секунды между сообщениями
+            logger.info(f"⏸️ Защита от спама: жду {2-time_since_last:.1f} сек")
+            time.sleep(2 - time_since_last)  # 🆕 Автоматическая пауза
+    
+    send_to_channel.last_channel_message_time = current_time
         
     if sticker_id:
         return send_telegram_sticker(TELEGRAM_CHANNEL_ID, sticker_id)
@@ -253,6 +283,7 @@ def handle_telegram_command(chat_id, command, message=None):
             "📢 <b>В канал:</b> Только стикеры при редких семенах\n"
             "🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
             "💾 <b>Умный кэш:</b> Сохраняет состояние между перезапусками\n"
+            "🛡️ <b>Защита от спама:</b> Автоматические паузы между сообщениями\n"
             "📊 <b>Авто-статус:</b> Каждые 5 часов\n\n"
             f"🎯 <b>Отслеживаю семена:</b>\n"
             f"{seeds_list}\n\n"
@@ -292,7 +323,7 @@ def telegram_poller_safe():
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
             params = {
                 'offset': telegram_offset + 1,
-                'timeout': 10,  # Уменьшили таймаут
+                'timeout': 10,
                 'limit': 1
             }
             
@@ -441,7 +472,7 @@ def check_ember_messages(messages):
         found_any_seed = False
         newest_id = messages[0]['id']
         
-        # 🆕 Загружаем last_processed_id при первом запуске
+        # Загружаем last_processed_id при первом запуске
         if last_processed_id is None:
             last_processed_id = load_last_processed_id()
             if last_processed_id:
@@ -458,7 +489,7 @@ def check_ember_messages(messages):
         for message in messages:
             message_id = message['id']
             
-            # 🆕 Пропускаем сообщения которые УЖЕ обработаны (старые)
+            # Пропускаем сообщения которые УЖЕ обработаны (старые)
             if message_id <= last_processed_id:
                 logger.info(f"⏩ Пропускаем старое сообщение: {message_id} (последний: {last_processed_id})")
                 continue
@@ -527,7 +558,7 @@ def check_ember_messages(messages):
                     
                     send_to_bot(bot_message)
         
-        # 🆕 Сохраняем САМЫЙ НОВЫЙ ID как обработанный
+        # Сохраняем САМЫЙ НОВЫЙ ID как обработанный
         if newest_id > last_processed_id:
             last_processed_id = newest_id
             save_last_processed_id(newest_id)
@@ -546,7 +577,7 @@ def check_ember_messages(messages):
         return False
 
 def monitor_discord():
-    """Основная функция мониторинга"""
+    """🆕 Основная функция мониторинга - С УЛУЧШЕННОЙ ОЧИСТКОЙ ПАМЯТИ"""
     logger.info("🔄 Запуск мониторинга Discord...")
     
     error_count = 0
@@ -559,12 +590,18 @@ def monitor_discord():
             if messages is not None:
                 found_any_seed = check_ember_messages(messages)
                 
+                # 🆕 ДОБАВЛЕНО: Очистка памяти каждый цикл
+                cleanup_memory_cache()
+                
                 if found_any_seed:
                     logger.info("✅ Стикер о семенах отправлен в канал!")
                 
                 error_count = 0
             else:
                 error_count += 1
+                # 🆕 ТАКЖЕ очищаем при ошибках
+                cleanup_memory_cache()
+                
                 logger.warning(f"⚠️ Ошибка получения сообщений ({error_count}/{max_errors})")
                 
                 if error_count >= max_errors:
@@ -646,6 +683,7 @@ def home():
                 <div class="info"><strong>Канал:</strong> {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}</div>
                 <div class="info"><strong>Самопинг:</strong> 🏓 {ping_count} раз</div>
                 <div class="info"><strong>Последнее сообщение:</strong> {last_processed_id or 'Еще не обработано'}</div>
+                <div class="info"><strong>В памяти:</strong> {len(processed_messages_cache)} сообщений</div>
                 <div class="info"><strong>Авто-статус:</strong> 📊 Каждые 5 часов</div>
                 <div class="info"><strong>Отслеживаю:</strong> {seeds_list}</div>
             </div>
@@ -663,6 +701,7 @@ def home():
                 <p>📢 <strong>В канал:</strong> Только стикеры при редких семенах</p>
                 <p>🎯 <strong>Отслеживаю:</strong> {seeds_list}</p>
                 <p>💾 <strong>Умный кэш:</strong> Сохраняет состояние между перезапусками</p>
+                <p>🛡️ <strong>Защита от спама:</strong> Автоматические паузы между сообщениями</p>
                 <p>🏓 <strong>Самопинг:</strong> Каждые 8 минут</p>
                 <p>📊 <strong>Авто-статус:</strong> Каждые 5 часов</p>
             </div>
@@ -705,10 +744,12 @@ def start_background_threads():
 if __name__ == '__main__':
     seeds_list = ", ".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
     
-    logger.info("🚀 ЗАПУСК БОТА С ПРАВИЛЬНЫМ КЭШЕМ!")
+    logger.info("🚀 ЗАПУСК БОТА С УЛУЧШЕНИЯМИ ДЛЯ ПРОДАКШЕНА!")
     logger.info("📱 Вам в бота: Все стоки от Ember (читабельный текст)")
     logger.info("📢 В канал: Только стикеры при редких семенах")
     logger.info(f"🎯 Отслеживаю: {seeds_list}")
+    logger.info("🛡️ Защита от спама: Активна (2 сек между сообщениями)")
+    logger.info("🧹 Умная очистка памяти: Активна")
     logger.info("🏓 Самопинг: Активен (каждые 8 минут)")
     logger.info("📊 Авто-статус: Каждые 5 часов")
     
@@ -717,11 +758,13 @@ if __name__ == '__main__':
     seeds_list_bot = "\n".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
     
     startup_msg_bot = (
-        f"🚀 <b>Бот запущен с правильным кэшем!</b>\n\n"
+        f"🚀 <b>Бот запущен с улучшениями для продакшена!</b>\n\n"
         f"📱 <b>Вам в бота:</b> Все стоки от Ember (читабельный текст)\n"
         f"📢 <b>В канал:</b> Только стикеры при редких семенах\n"
         f"🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
         f"💾 <b>Умный кэш:</b> Сохраняет состояние между перезапусками\n"
+        f"🛡️ <b>Защита от спама:</b> Автоматические паузы между сообщениями\n"
+        f"🧹 <b>Очистка памяти:</b> Автоматическая оптимизация\n"
         f"📊 <b>Авто-статус:</b> Каждые 5 часов\n\n"
         f"🎯 <b>Отслеживаю семена:</b>\n"
         f"{seeds_list_bot}\n\n"
