@@ -15,13 +15,13 @@ app = Flask(__name__)
 
 # Токены и ID
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-TELEGRAM_CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')  # 🆕 ОСНОВНОЙ КАНАЛ
+TELEGRAM_CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')
 TELEGRAM_BOT_CHAT_ID = os.getenv('TELEGRAM_BOT_CHAT_ID')
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 DISCORD_CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')
 RENDER_SERVICE_URL = os.getenv('RENDER_SERVICE_URL', 'https://stock-bot-cj4s.onrender.com')
 
-# 🆕 ФИНАЛЬНЫЕ НАСТРОЙКИ СЕМЯН - ТОЛЬКО РЕДКИЕ
+# 🆕 ИСПРАВЛЕННЫЕ настройки отслеживаемых семян
 TARGET_SEEDS = {
     'trinity_fruit': {
         'keywords': ['trinity fruit', 'trinityfruit', ':trinityfruit'],
@@ -30,12 +30,11 @@ TARGET_SEEDS = {
         'display_name': 'Trinity Fruit'
     },
     'crimson_thorn': {
-        'keywords': ['crimson thorn', 'crimsonthorn', ':crimsonthorn'],
+        'keywords': ['crimson thorn', 'crimsonthorn', ':crimsonthorn', ':crimsonthon'],  # 🆕 ДОБАВЛЕН вариант с опечаткой
         'sticker_id': "CAACAgIAAxkBAAEPtExpCrIew_M01f5h8MyaGyeMKAABiiEAAvmLAALkoFhIP2bLUVXqoWU2BA",
         'emoji': '🌵',
         'display_name': 'Crimson Thorn'
     }
-    # 🆕 ТОМАТЫ УБРАНЫ - добавляйте сюда новые семена при необходимости
 }
 
 # Глобальные переменные
@@ -180,9 +179,10 @@ def send_to_channel(text=None, sticker_id=None):
     current_time = time.time()
     
     time_since_last = current_time - send_to_channel.last_channel_message_time
-    if time_since_last < 2:  # 🆕 Минимум 2 секунды между сообщениями
-        logger.info(f"⏸️ Защита от спама: жду {2-time_since_last:.1f} сек")
-        time.sleep(2 - time_since_last)  # 🆕 Автоматическая пауза
+    if time_since_last < 2 and time_since_last >= 0:  # 🆕 Защита от отрицательных значений
+        wait_time = 2 - time_since_last
+        logger.info(f"⏸️ Защита от спама: жду {wait_time:.1f} сек")
+        time.sleep(wait_time)
     
     send_to_channel.last_channel_message_time = current_time
         
@@ -739,7 +739,7 @@ def start_background_threads():
 if __name__ == '__main__':
     seeds_list = ", ".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
     
-    logger.info("🚀 ФИНАЛЬНАЯ ВЕРСИЯ ДЛЯ ОСНОВНОГО КАНАЛА!")
+    logger.info("🚀 ФИНАЛЬНАЯ ВЕРСИЯ С ИСПРАВЛЕННЫМИ КЛЮЧЕВЫМИ СЛОВАМИ!")
     logger.info("📱 Вам в бота: Все стоки от Ember (читабельный текст)")
     logger.info("📢 В канал: Только стикеры при редких семенах")
     logger.info(f"🎯 Отслеживаю: {seeds_list}")
@@ -753,7 +753,7 @@ if __name__ == '__main__':
     seeds_list_bot = "\n".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
     
     startup_msg_bot = (
-        f"🚀 <b>ФИНАЛЬНАЯ ВЕРСИЯ ДЛЯ ОСНОВНОГО КАНАЛА!</b>\n\n"
+        f"🚀 <b>ФИНАЛЬНАЯ ВЕРСИЯ С ИСПРАВЛЕННЫМИ КЛЮЧЕВЫМИ СЛОВАМИ!</b>\n\n"
         f"📱 <b>Вам в бота:</b> Все стоки от Ember (читабельный текст)\n"
         f"📢 <b>В канал:</b> Только стикеры при редких семенах\n"
         f"🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
