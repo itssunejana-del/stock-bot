@@ -21,7 +21,7 @@ DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 DISCORD_CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')
 RENDER_SERVICE_URL = os.getenv('RENDER_SERVICE_URL', 'https://stock-bot-cj4s.onrender.com')
 
-# 🆕 ИСПРАВЛЕННЫЕ настройки отслеживаемых семян
+# 🆕 ОБНОВЛЕННЫЕ настройки отслеживаемых семян (ДОБАВЛЕН Zebrazinkle)
 TARGET_SEEDS = {
     'trinity_fruit': {
         'keywords': ['trinity fruit', 'trinityfruit', ':trinityfruit'],
@@ -30,10 +30,16 @@ TARGET_SEEDS = {
         'display_name': 'Trinity Fruit'
     },
     'crimson_thorn': {
-        'keywords': ['crimson thorn', 'crimsonthorn', ':crimsonthorn', ':crimsonthon'],  # 🆕 ДОБАВЛЕН вариант с опечаткой
+        'keywords': ['crimson thorn', 'crimsonthorn', ':crimsonthorn', ':crimsonthon'],
         'sticker_id': "CAACAgIAAxkBAAEPtExpCrIew_M01f5h8MyaGyeMKAABiiEAAvmLAALkoFhIP2bLUVXqoWU2BA",
         'emoji': '🌵',
         'display_name': 'Crimson Thorn'
+    },
+    'zebrazinkle': {
+        'keywords': ['zebrazinkle', 'zebra zinkle', ':zebrazinkle'],
+        'sticker_id': "CAACAgIAAxkBAAEPwjJpFDhW_6Vu29vF7DrTHFBcSf_WIAAC1XkAAkCXoUgr50G4SlzwrzYE",
+        'emoji': '🦓',
+        'display_name': 'Zebrazinkle'
     }
 }
 
@@ -739,7 +745,7 @@ def start_background_threads():
 if __name__ == '__main__':
     seeds_list = ", ".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
     
-    logger.info("🚀 ФИНАЛЬНАЯ ВЕРСИЯ С ИСПРАВЛЕННЫМИ КЛЮЧЕВЫМИ СЛОВАМИ!")
+    logger.info("🚀 ОБНОВЛЕННАЯ ВЕРСИЯ С ZEBRAZINKLE!")
     logger.info("📱 Вам в бота: Все стоки от Ember (читабельный текст)")
     logger.info("📢 В канал: Только стикеры при редких семенах")
     logger.info(f"🎯 Отслеживаю: {seeds_list}")
@@ -753,7 +759,7 @@ if __name__ == '__main__':
     seeds_list_bot = "\n".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
     
     startup_msg_bot = (
-        f"🚀 <b>ФИНАЛЬНАЯ ВЕРСИЯ С ИСПРАВЛЕННЫМИ КЛЮЧЕВЫМИ СЛОВАМИ!</b>\n\n"
+        f"🚀 <b>ОБНОВЛЕННАЯ ВЕРСИЯ!</b>\n\n"
         f"📱 <b>Вам в бота:</b> Все стоки от Ember (читабельный текст)\n"
         f"📢 <b>В канал:</b> Только стикеры при редких семенах\n"
         f"🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
