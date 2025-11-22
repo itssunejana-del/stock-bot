@@ -21,13 +21,25 @@ DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 DISCORD_CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')
 RENDER_SERVICE_URL = os.getenv('RENDER_SERVICE_URL', 'https://stock-bot-cj4s.onrender.com')
 
-# 🆕 ОБНОВЛЕННЫЕ настройки отслеживаемых семян (ДОБАВЛЕН Zebrazinkle)
+# 🆕 ОБНОВЛЕННЫЕ настройки отслеживаемых семян
 TARGET_SEEDS = {
-    'trinity_fruit': {
-        'keywords': ['trinity fruit', 'trinityfruit', ':trinityfruit'],
-        'sticker_id': "CAACAgIAAxkBAAEPszZpCfLc2HlDxyNpkHpQmxlBl94iwQACjYEAApqASUgobiA_uUJNkzYE",
-        'emoji': '🔺',
-        'display_name': 'Trinity Fruit'
+    'sunflower': {
+        'keywords': ['sunflower', 'подсолнух', ':sunflower'],
+        'sticker_id': "CAACAgIAAxkBAAEP1blpIXhBRfYIqb6UEdBko8ybzHHh7gACGIcAAlutCEn_Rs8a-b8_fTYE",
+        'emoji': '🌻',
+        'display_name': 'Sunflower'
+    },
+    'octobloom': {
+        'keywords': ['octobloom', 'октоблум', ':octobloom'],
+        'sticker_id': "CAACAgIAAxkBAAEP1btpIXhIEvgVEK4c6ugJv1EgP7UY-wAChokAAtZpCElVMcRUgb_jdDYE",
+        'emoji': '🐙',
+        'display_name': 'Octobloom'
+    },
+    'gem_egg': {
+        'keywords': ['gem egg', 'gemegg', ':gemegg'],
+        'sticker_id': "CAACAgIAAxkBAAEP1b9pIXhSl-ElpsKgOEEY-8oOmJ1qnAACI4MAAq6w2EinW-vu8EV_RzYE",
+        'emoji': '💎',
+        'display_name': 'Gem Egg'
     },
     'crimson_thorn': {
         'keywords': ['crimson thorn', 'crimsonthorn', ':crimsonthorn', ':crimsonthon'],
@@ -745,7 +757,7 @@ def start_background_threads():
 if __name__ == '__main__':
     seeds_list = ", ".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
     
-    logger.info("🚀 ОБНОВЛЕННАЯ ВЕРСИЯ С ZEBRAZINKLE!")
+    logger.info("🚀 ОБНОВЛЕННАЯ ВЕРСИЯ С НОВЫМИ СЕМЕНАМИ!")
     logger.info("📱 Вам в бота: Все стоки от Ember (читабельный текст)")
     logger.info("📢 В канал: Только стикеры при редких семенах")
     logger.info(f"🎯 Отслеживаю: {seeds_list}")
@@ -759,7 +771,7 @@ if __name__ == '__main__':
     seeds_list_bot = "\n".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
     
     startup_msg_bot = (
-        f"🚀 <b>ОБНОВЛЕННАЯ ВЕРСИЯ!</b>\n\n"
+        f"🚀 <b>ОБНОВЛЕННАЯ ВЕРСИЯ С НОВЫМИ СЕМЕНАМИ!</b>\n\n"
         f"📱 <b>Вам в бота:</b> Все стоки от Ember (читабельный текст)\n"
         f"📢 <b>В канал:</b> Только стикеры при редких семенах\n"
         f"🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
