@@ -21,7 +21,7 @@ DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 DISCORD_CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')
 RENDER_SERVICE_URL = os.getenv('RENDER_SERVICE_URL', 'https://stock-bot-cj4s.onrender.com')
 
-# 🆕 ОБНОВЛЕННЫЕ настройки отслеживаемых семян (SUNFLOWER УДАЛЕН)
+# 🆕 ИСПРАВЛЕННЫЕ настройки отслеживаемых семян (SUNFLOWER ПОЛНОСТЬЮ УДАЛЕН)
 TARGET_SEEDS = {
     'octobloom': {
         'keywords': ['octobloom', 'октоблум', ':octobloom'],
@@ -751,7 +751,7 @@ def start_background_threads():
 if __name__ == '__main__':
     seeds_list = ", ".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
     
-    logger.info("🚀 ОБНОВЛЕННАЯ ВЕРСИЯ БЕЗ SUNFLOWER!")
+    logger.info("🚀 ИСПРАВЛЕННАЯ ВЕРСИЯ БЕЗ SUNFLOWER!")
     logger.info("📱 Вам в бота: Все стоки от Ember (читабельный текст)")
     logger.info("📢 В канал: Только стикеры при редких семенах")
     logger.info(f"🎯 Отслеживаю: {seeds_list}")
@@ -765,7 +765,7 @@ if __name__ == '__main__':
     seeds_list_bot = "\n".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
     
     startup_msg_bot = (
-        f"🚀 <b>ОБНОВЛЕННАЯ ВЕРСИЯ БЕЗ SUNFLOWER!</b>\n\n"
+        f"🚀 <b>ИСПРАВЛЕННАЯ ВЕРСИЯ БЕЗ SUNFLOWER!</b>\n\n"
         f"📱 <b>Вам в бота:</b> Все стоки от Ember (читабельный текст)\n"
         f"📢 <b>В канал:</b> Только стикеры при редких семенах\n"
         f"🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
