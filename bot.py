@@ -482,15 +482,15 @@ def format_ember_message_for_bot(message):
     return cleaned_text.strip()
 
 def check_ember_messages(messages):
-    """🆕 Проверяет сообщения из МНОЖЕСТВА каналов"""
+    """🆕 Проверяет сообщения из МНОЖЕСТВА каналов - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
     global last_processed_ids, bot_status, last_error, processed_messages_cache, found_seeds_count
     
     if not messages:
         return False
     
     try:
-        # Сортируем по ID (примерно по времени)
-        messages.sort(key=lambda x: x['id'], reverse=True)
+        # Сортируем по ID (примерно по времени) - КОНВЕРТИРУЕМ ID В INT ДЛЯ СРАВНЕНИЯ
+        messages.sort(key=lambda x: int(x['id']), reverse=True)
         
         found_any_seed = False
         
@@ -506,9 +506,18 @@ def check_ember_messages(messages):
             # Получаем last_processed_id для этого канала
             channel_last_id = last_processed_ids.get(channel_id)
             
+            # 🆕 КОНВЕРТИРУЕМ ID В INT ДЛЯ СРАВНЕНИЯ
+            message_id_int = int(message_id)
+            
             # Пропускаем сообщения которые УЖЕ обработаны (старые)
-            if channel_last_id and message_id <= channel_last_id:
-                continue
+            if channel_last_id:
+                try:
+                    channel_last_id_int = int(channel_last_id)
+                    if message_id_int <= channel_last_id_int:
+                        continue
+                except (ValueError, TypeError):
+                    # Если не удается конвертировать, просто продолжаем
+                    pass
             
             # Защита от дублирования в оперативной памяти
             if message_id in processed_messages_cache:
@@ -580,8 +589,18 @@ def check_ember_messages(messages):
             # Находим самое новое сообщение в этом канале
             channel_messages = [msg for msg in messages if msg.get('source_channel_id') == channel_id]
             if channel_messages:
-                newest_in_channel = max(channel_messages, key=lambda x: x['id'])
-                if newest_in_channel['id'] > last_processed_ids.get(channel_id, 0):
+                # КОНВЕРТИРУЕМ ID В INT ДЛЯ СРАВНЕНИЯ
+                newest_in_channel = max(channel_messages, key=lambda x: int(x['id']))
+                current_last_id = last_processed_ids.get(channel_id, '0')
+                
+                try:
+                    current_last_id_int = int(current_last_id) if current_last_id != '0' else 0
+                    newest_id_int = int(newest_in_channel['id'])
+                    
+                    if newest_id_int > current_last_id_int:
+                        last_processed_ids[channel_id] = newest_in_channel['id']  # сохраняем как строку
+                except (ValueError, TypeError):
+                    # Если ошибка, просто обновляем
                     last_processed_ids[channel_id] = newest_in_channel['id']
         
         # Сохраняем кэш
