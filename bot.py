@@ -482,16 +482,13 @@ def format_ember_message_for_bot(message):
     return cleaned_text.strip()
 
 def check_ember_messages(messages):
-    """🆕 Проверяет сообщения из МНОЖЕСТВА каналов - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
+    """🆕 УПРОЩЕННАЯ версия проверки сообщений - РАБОЧАЯ"""
     global last_processed_ids, bot_status, last_error, processed_messages_cache, found_seeds_count
     
     if not messages:
         return False
     
     try:
-        # Сортируем по ID (примерно по времени) - КОНВЕРТИРУЕМ ID В INT ДЛЯ СРАВНЕНИЯ
-        messages.sort(key=lambda x: int(x['id']), reverse=True)
-        
         found_any_seed = False
         
         # Инициализируем last_processed_ids при первом запуске
@@ -499,62 +496,63 @@ def check_ember_messages(messages):
             last_processed_ids = load_last_processed_ids()
             logger.info(f"📂 Загружены last_processed_ids для {len(last_processed_ids)} каналов")
         
+        # Проходим по всем сообщениям
         for message in messages:
-            message_id = message['id']
-            channel_id = message.get('source_channel_id', 'unknown')
-            
-            # Получаем last_processed_id для этого канала
-            channel_last_id = last_processed_ids.get(channel_id)
-            
-            # 🆕 КОНВЕРТИРУЕМ ID В INT ДЛЯ СРАВНЕНИЯ
-            message_id_int = int(message_id)
-            
-            # Пропускаем сообщения которые УЖЕ обработаны (старые)
-            if channel_last_id:
-                try:
-                    channel_last_id_int = int(channel_last_id)
-                    if message_id_int <= channel_last_id_int:
-                        continue
-                except (ValueError, TypeError):
-                    # Если не удается конвертировать, просто продолжаем
-                    pass
-            
-            # Защита от дублирования в оперативной памяти
-            if message_id in processed_messages_cache:
-                continue
-            
-            author = message.get('author', {}).get('username', '')
-            
-            # Проверяем, является ли автор ботом (Ember или другим)
-            # Можно расширить список ботов
-            if 'Ember' in author or 'bot' in author.lower() or any(keyword in author.lower() for keyword in ['seed', 'stock', 'авто']):
-                logger.info(f"🔍 Новое сообщение от {author} в канале {channel_id[-6:]}: {message_id}")
+            try:
+                message_id = str(message.get('id', ''))
+                if not message_id:
+                    continue
+                    
+                channel_id = str(message.get('source_channel_id', 'unknown'))
                 
-                # Добавляем в оперативный кэш
-                processed_messages_cache.add(message_id)
+                # Создаем уникальный ключ для кэша
+                cache_key = f"{channel_id}:{message_id}"
                 
-                # 📱 В БОТА - КРАСИВО ОТФОРМАТИРОВАННЫЙ ТЕКСТ
+                # Проверяем дубликаты в кэше памяти
+                if cache_key in processed_messages_cache:
+                    continue
+                
+                # Получаем информацию об авторе
+                author_info = message.get('author', {})
+                author_name = str(author_info.get('username', '')).lower()
+                
+                # Проверяем, является ли автор ботом
+                if not ('ember' in author_name or 'bot' in author_name):
+                    continue
+                
+                # Добавляем в кэш памяти
+                processed_messages_cache.add(cache_key)
+                
+                # Получаем текст сообщения
+                full_text = extract_all_text_from_message(message)
+                
+                # Форматируем для отправки боту
                 formatted_message = format_ember_message_for_bot(message)
                 
                 if formatted_message:
-                    # 🔍 Проверяем на наличие всех отслеживаемых семян
-                    full_search_text = extract_all_text_from_message(message)
-                    search_text_lower = full_search_text.lower()
+                    # Отправляем сообщение боту
+                    current_time = datetime.now().strftime('%H:%M:%S')
+                    channel_short = channel_id[-6:] if len(channel_id) > 6 else channel_id
+                    bot_message = (
+                        f"📡 Канал: {channel_short}\n"
+                        f"🕒 Время: {current_time}\n\n"
+                        f"<code>{formatted_message}</code>"
+                    )
+                    send_to_bot(bot_message)
                     
-                    found_tracked_seeds = []
-                    
+                    # Проверяем наличие семян
+                    text_lower = full_text.lower()
                     for seed_name, seed_config in TARGET_SEEDS.items():
                         for keyword in seed_config['keywords']:
-                            if keyword in search_text_lower:
+                            if keyword in text_lower:
                                 found_seeds_count[seed_name] += 1
-                                found_tracked_seeds.append(seed_config['display_name'])
-                                logger.info(f"🎯 ОБНАРУЖЕН {seed_name.upper()} в канале {channel_id[-6:]}! Ключевое слово: '{keyword}'")
+                                logger.info(f"🎯 Найден {seed_name.upper()} в канале {channel_short}!")
                                 
-                                # 📢 Отправляем стикер в канал
+                                # Отправляем стикер в канал
                                 sticker_sent = send_to_channel(sticker_id=seed_config['sticker_id'])
                                 
                                 if sticker_sent:
-                                    send_to_bot(f"✅ Стикер {seed_config['emoji']} отправлен в канал (канал: {channel_id[-6:]})")
+                                    send_to_bot(f"✅ Стикер {seed_config['emoji']} отправлен в канал")
                                     logger.info(f"✅ Стикер о {seed_name} отправлен в канал!")
                                 else:
                                     send_to_bot(f"❌ Стикер {seed_config['emoji']} не отправлен в канал")
@@ -562,50 +560,18 @@ def check_ember_messages(messages):
                                 
                                 found_any_seed = True
                                 break
-                    
-                    # ФОРМАТИРОВАНИЕ СООБЩЕНИЯ В БОТА
-                    current_time = datetime.now().strftime('%H:%M:%S')
-                    channel_short = channel_id[-6:] if len(channel_id) > 6 else channel_id
-                    
-                    if found_tracked_seeds:
-                        seeds_str = ", ".join(found_tracked_seeds)
-                        bot_message = (
-                            f"⏰ Найдены отслеживаемые семена\n"
-                            f"📡 Канал: {channel_short}\n"
-                            f"🕒 Время: {current_time}\n\n"
-                            f"<code>{formatted_message}</code>"
-                        )
-                    else:
-                        bot_message = (
-                            f"📡 Канал: {channel_short}\n"
-                            f"🕒 Время: {current_time}\n\n"
-                            f"<code>{formatted_message}</code>"
-                        )
-                    
-                    send_to_bot(bot_message)
-        
-        # Обновляем last_processed_id для каждого канала
-        for channel_id in DISCORD_CHANNEL_IDS:
-            # Находим самое новое сообщение в этом канале
-            channel_messages = [msg for msg in messages if msg.get('source_channel_id') == channel_id]
-            if channel_messages:
-                # КОНВЕРТИРУЕМ ID В INT ДЛЯ СРАВНЕНИЯ
-                newest_in_channel = max(channel_messages, key=lambda x: int(x['id']))
-                current_last_id = last_processed_ids.get(channel_id, '0')
                 
-                try:
-                    current_last_id_int = int(current_last_id) if current_last_id != '0' else 0
-                    newest_id_int = int(newest_in_channel['id'])
-                    
-                    if newest_id_int > current_last_id_int:
-                        last_processed_ids[channel_id] = newest_in_channel['id']  # сохраняем как строку
-                except (ValueError, TypeError):
-                    # Если ошибка, просто обновляем
-                    last_processed_ids[channel_id] = newest_in_channel['id']
+                # Обновляем last_processed_id для этого канала
+                last_processed_ids[channel_id] = message_id
+                
+            except Exception as e:
+                logger.error(f"❌ Ошибка обработки сообщения: {e}")
+                continue
         
-        # Сохраняем кэш
-        save_last_processed_ids()
-        logger.info(f"💾 Обновлены last_processed_ids для {len(last_processed_ids)} каналов")
+        # Сохраняем обновленные last_processed_ids
+        if last_processed_ids:
+            save_last_processed_ids()
+            logger.info(f"💾 Сохранены last_processed_ids для {len(last_processed_ids)} каналов")
         
         bot_status = "🟢 Работает нормально"
         last_error = None
