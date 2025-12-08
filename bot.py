@@ -36,7 +36,7 @@ else:
 
 RENDER_SERVICE_URL = os.getenv('RENDER_SERVICE_URL', 'https://stock-bot-cj4s.onrender.com')
 
-# 🆕 Настройки отслеживаемых семян
+# 🆕 ОБНОВЛЕННЫЕ настройки отслеживаемых семян
 TARGET_SEEDS = {
     'octobloom': {
         'keywords': ['octobloom', 'октоблум', ':octobloom'],
@@ -50,17 +50,25 @@ TARGET_SEEDS = {
         'emoji': '💎',
         'display_name': 'Gem Egg'
     },
-    'crimson_thorn': {
-        'keywords': ['crimson thorn', 'crimsonthorn', ':crimsonthorn', ':crimsonthon'],
-        'sticker_id': "CAACAgIAAxkBAAEPtExpCrIew_M01f5h8MyaGyeMKAABiiEAAvmLAALkoFhIP2bLUVXqoWU2BA",
-        'emoji': '🌵',
-        'display_name': 'Crimson Thorn'
-    },
     'zebrazinkle': {
         'keywords': ['zebrazinkle', 'zebra zinkle', ':zebrazinkle'],
         'sticker_id': "CAACAgIAAxkBAAEPwjJpFDhW_6Vu29vF7DrTHFBcSf_WIAAC1XkAAkCXoUgr50G4SlzwrzYE",
         'emoji': '🦓',
         'display_name': 'Zebrazinkle'
+    },
+    # 🆕 ДОБАВЛЕН Peppermint Vine
+    'peppermint_vine': {
+        'keywords': ['peppermint vine', 'peppermintvine', ':peppermintvine', 'перечная лоза', 'перечная'],
+        'sticker_id': "CAACAgIAAxkBAAEP9hZpNtYLGgXJ5UmFIzEjQ6tL6jX-_QACrokAAk1ouUn1z9iCPYIanzYE",
+        'emoji': '🌿',
+        'display_name': 'Peppermint Vine'
+    },
+    # 🆕 ДОБАВЛЕН Tomato для тестирования
+    'tomato': {
+        'keywords': ['tomato', 'томат', ':tomato'],
+        'sticker_id': "CAACAgIAAxkBAAEPtFBpCrZ_mxXMfMmrjTZkBHN3Tpn9OAACf3sAAoEeWUgkKobs-st7ojYE",
+        'emoji': '🍅',
+        'display_name': 'Tomato'
     }
 }
 
@@ -90,7 +98,6 @@ def save_last_processed_ids():
             json.dump(save_data, f, indent=2)
         
         logger.info(f"💾 Сохранены last_processed_ids для {len(last_processed_ids)} каналов в {CACHE_FILE}")
-        logger.debug(f"💾 Данные: {json.dumps(last_processed_ids, indent=2)}")
         
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения кэша: {e}")
@@ -112,7 +119,6 @@ def load_last_processed_ids():
                 data = json.load(f)
                 loaded_ids = data.get('last_processed_ids', {})
                 logger.info(f"📂 Загружены last_processed_ids для {len(loaded_ids)} каналов из {CACHE_FILE}")
-                logger.debug(f"📂 Данные: {json.dumps(loaded_ids, indent=2)}")
                 return loaded_ids
         
         # Пробуем альтернативный путь
@@ -465,7 +471,7 @@ def clean_ember_text_for_display(text):
     
     for line in lines:
         line = line.strip()
-        if line and ('x' in line or ':' in line or any(word in line.lower() for word in ['seeds', 'gear', 'alert'])):
+        if line and ('x' in line or ':' in line or any(word in line.lower() for word in ['seeds', 'gear', 'alert', 'stock', 'seeds stock', 'eggs stock'])):
             cleaned_lines.append(line)
     
     return '\n'.join(cleaned_lines)
@@ -554,10 +560,10 @@ def check_ember_messages(messages):
                 
                 # Проверяем, является ли автор ботом
                 is_bot = message.get('author', {}).get('bot', False)
-                is_ember = 'ember' in author_name or 'ember' in author_global_name
                 is_bot_like = 'bot' in author_name or 'бот' in author_name
                 
-                if not (is_bot or is_ember or is_bot_like):
+                # 🆕 Теперь отслеживаем ВСЕ сообщения от ботов, а не только Ember
+                if not (is_bot or is_bot_like):
                     continue
                 
                 # Добавляем в кэш памяти
@@ -588,7 +594,7 @@ def check_ember_messages(messages):
                         for keyword in seed_config['keywords']:
                             if keyword in text_lower:
                                 found_seeds_count[seed_name] += 1
-                                logger.info(f"🎯 Найден {seed_name.upper()} в канале {channel_short}!")
+                                logger.info(f"🎯 Найден {seed_name.upper()} в канале {channel_short}! Ключевое слово: '{keyword}'")
                                 
                                 # Отправляем стикер в канал
                                 sticker_sent = send_to_channel(sticker_id=seed_config['sticker_id'])
@@ -790,7 +796,7 @@ def home():
                 <p>💾 <strong>Умный кэш:</strong> Сохраняет состояние для каждого канала</p>
                 <p>🛡️ <strong>Защита от спама:</strong> Автоматические паузы между сообщениями</p>
                 <p>🏓 <strong>Самопинг:</strong> Каждые 8 минут</p>
-                <p>📊 <strong>Авто-статус:</strong> Каждые 5 часов</p>
+                <p>📊 <strong>Авто-статус:</b> Каждые 5 часов</p>
             </div>
         </body>
     </html>
@@ -836,6 +842,8 @@ if __name__ == '__main__':
     logger.info("📱 Вам в бота: Все стоки из всех каналов")
     logger.info("📢 В канал: Только стикеры при редких семенах")
     logger.info(f"🎯 Отслеживаю: {seeds_list}")
+    logger.info("🆕 ОБНОВЛЕНО: Убран Sunflower и Crimson Thorn")
+    logger.info("🆕 ДОБАВЛЕНО: Peppermint Vine и Tomato (для теста)")
     logger.info(f"📁 Путь к кэшу: {CACHE_FILE}")
     logger.info("🛡️ Защита от спама: Активна (2 сек между сообщениями)")
     logger.info("🧹 Умная очистка памяти: Активна")
@@ -864,8 +872,11 @@ if __name__ == '__main__':
         f"🛡️ <b>Защита от спама:</b> Автоматические паузы между сообщениями\n"
         f"🧹 <b>Очистка памяти:</b> Автоматическая оптимизация\n"
         f"📊 <b>Авто-статус:</b> Каждые 5 часов\n\n"
-        f"🎯 <b>Отслеживаю семена:</b>\n"
+        f"🎯 <b>ОБНОВЛЕННЫЙ список семян:</b>\n"
         f"{seeds_list_bot}\n\n"
+        f"🔄 <b>Изменения:</b>\n"
+        f"• ❌ Убраны: Sunflower, Crimson Thorn\n"
+        f"• ✅ Добавлены: Peppermint Vine, Tomato (тестовый)\n\n"
         f"🎛️ <b>Команды:</b>\n"
         f"/start - Информация\n"
         f"/status - Статус\n" 
