@@ -66,7 +66,7 @@ TARGET_SEEDS = {
 
 # 🆕 Глобальные переменные для множественных каналов
 last_processed_ids = {}  # Словарь: {channel_id: last_message_id}
-CACHE_FILE = 'last_processed_ids.json'  # 🆕 Новый файл кэша
+CACHE_FILE = '/tmp/last_processed_ids.json'  # 🆕 Используем /tmp/ директорию (доступную для записи в Render)
 startup_time = datetime.now()
 channel_enabled = True
 bot_status = "🟢 Работает нормально"
@@ -80,24 +80,53 @@ found_seeds_count = {name: 0 for name in TARGET_SEEDS.keys()}
 def save_last_processed_ids():
     """Сохраняет последние обработанные ID для всех каналов"""
     try:
+        # Создаем словарь для сохранения
+        save_data = {
+            'last_processed_ids': last_processed_ids,
+            'saved_at': datetime.now().isoformat()
+        }
+        
         with open(CACHE_FILE, 'w') as f:
-            json.dump({'last_processed_ids': last_processed_ids}, f)
-        logger.info(f"💾 Сохранены last_processed_ids для {len(last_processed_ids)} каналов")
+            json.dump(save_data, f, indent=2)
+        
+        logger.info(f"💾 Сохранены last_processed_ids для {len(last_processed_ids)} каналов в {CACHE_FILE}")
+        logger.debug(f"💾 Данные: {json.dumps(last_processed_ids, indent=2)}")
+        
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения кэша: {e}")
+        # Пробуем альтернативный путь
+        try:
+            alt_path = './last_processed_ids.json'
+            with open(alt_path, 'w') as f:
+                json.dump({'last_processed_ids': last_processed_ids}, f)
+            logger.info(f"💾 Сохранено в альтернативный путь: {alt_path}")
+        except Exception as alt_e:
+            logger.error(f"❌ Ошибка альтернативного сохранения: {alt_e}")
 
 def load_last_processed_ids():
     """Загружает последние обработанные ID для всех каналов"""
     try:
+        # Пробуем основной путь
         if os.path.exists(CACHE_FILE):
             with open(CACHE_FILE, 'r') as f:
                 data = json.load(f)
                 loaded_ids = data.get('last_processed_ids', {})
-                logger.info(f"📂 Загружены last_processed_ids для {len(loaded_ids)} каналов")
+                logger.info(f"📂 Загружены last_processed_ids для {len(loaded_ids)} каналов из {CACHE_FILE}")
+                logger.debug(f"📂 Данные: {json.dumps(loaded_ids, indent=2)}")
                 return loaded_ids
-        else:
-            logger.info("📂 Файл кэша не найден, начинаем с начала")
-            return {}
+        
+        # Пробуем альтернативный путь
+        alt_path = './last_processed_ids.json'
+        if os.path.exists(alt_path):
+            with open(alt_path, 'r') as f:
+                data = json.load(f)
+                loaded_ids = data.get('last_processed_ids', {})
+                logger.info(f"📂 Загружены last_processed_ids для {len(loaded_ids)} каналов из {alt_path}")
+                return loaded_ids
+        
+        logger.info("📂 Файл кэша не найден, начинаем с начала")
+        return {}
+        
     except Exception as e:
         logger.error(f"❌ Ошибка загрузки кэша: {e}")
         return {}
@@ -259,6 +288,11 @@ def send_bot_status(chat_id):
         channel_short = channel_id[-6:] if len(channel_id) > 6 else channel_id
         channels_info.append(f"📡 Канал {channel_short}: {last_id}")
     
+    # Информация о файле кэша
+    cache_exists = os.path.exists(CACHE_FILE)
+    alt_cache_exists = os.path.exists('./last_processed_ids.json')
+    cache_info = f"📁 Кэш: {'✅' if cache_exists else '❌'}{' (альт: ✅)' if alt_cache_exists else ''}"
+    
     status_text = (
         f"📊 <b>Статус бота</b>\n\n"
         f"{bot_status}\n"
@@ -266,6 +300,7 @@ def send_bot_status(chat_id):
         f"📅 Запущен: {startup_time.strftime('%d.%m.%Y %H:%M')}\n"
         f"📢 Канал: {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}\n"
         f"📡 Отслеживаю: {len(DISCORD_CHANNEL_IDS)} каналов\n"
+        f"{cache_info}\n"
         f"🏓 Самопинг: {ping_count} раз (последний: {last_ping_str})\n"
         f"📝 В памяти: {len(processed_messages_cache)} сообщений\n\n"
         f"🎯 <b>Найдено семян:</b>\n"
@@ -515,9 +550,14 @@ def check_ember_messages(messages):
                 # Получаем информацию об авторе
                 author_info = message.get('author', {})
                 author_name = str(author_info.get('username', '')).lower()
+                author_global_name = str(author_info.get('global_name', '')).lower()
                 
                 # Проверяем, является ли автор ботом
-                if not ('ember' in author_name or 'bot' in author_name):
+                is_bot = message.get('author', {}).get('bot', False)
+                is_ember = 'ember' in author_name or 'ember' in author_global_name
+                is_bot_like = 'bot' in author_name or 'бот' in author_name
+                
+                if not (is_bot or is_ember or is_bot_like):
                     continue
                 
                 # Добавляем в кэш памяти
@@ -533,7 +573,9 @@ def check_ember_messages(messages):
                     # Отправляем сообщение боту
                     current_time = datetime.now().strftime('%H:%M:%S')
                     channel_short = channel_id[-6:] if len(channel_id) > 6 else channel_id
+                    author_display = author_info.get('global_name') or author_info.get('username', 'Unknown')
                     bot_message = (
+                        f"🤖 Автор: {author_display}\n"
                         f"📡 Канал: {channel_short}\n"
                         f"🕒 Время: {current_time}\n\n"
                         f"<code>{formatted_message}</code>"
@@ -564,14 +606,12 @@ def check_ember_messages(messages):
                 # Обновляем last_processed_id для этого канала
                 last_processed_ids[channel_id] = message_id
                 
+                # 🆕 Сохраняем кэш после каждого обработанного сообщения
+                save_last_processed_ids()
+                
             except Exception as e:
                 logger.error(f"❌ Ошибка обработки сообщения: {e}")
                 continue
-        
-        # Сохраняем обновленные last_processed_ids
-        if last_processed_ids:
-            save_last_processed_ids()
-            logger.info(f"💾 Сохранены last_processed_ids для {len(last_processed_ids)} каналов")
         
         bot_status = "🟢 Работает нормально"
         last_error = None
@@ -596,6 +636,16 @@ def monitor_discord():
     
     error_count = 0
     max_errors = 5
+    
+    # 🆕 Проверяем доступность записи в файл
+    try:
+        test_file = '/tmp/test_write.txt'
+        with open(test_file, 'w') as f:
+            f.write('test')
+        os.remove(test_file)
+        logger.info("✅ Проверка записи в /tmp/ прошла успешно")
+    except Exception as e:
+        logger.error(f"❌ Ошибка записи в /tmp/: {e}")
     
     while True:
         try:
@@ -645,11 +695,16 @@ def health_monitor():
             seeds_stats = "\n".join([f"{TARGET_SEEDS[name]['emoji']} {TARGET_SEEDS[name]['display_name']}: {count} раз" 
                                    for name, count in found_seeds_count.items()])
             
+            # Проверяем файл кэша
+            cache_exists = os.path.exists(CACHE_FILE)
+            cache_size = os.path.getsize(CACHE_FILE) if cache_exists else 0
+            
             status_report = (
                 f"📊 <b>Авто-статус #{report_count}</b>\n"
                 f"⏰ Работает: {hours:.1f} часов\n"
                 f"📢 Канал: {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}\n"
                 f"📡 Каналов: {len(DISCORD_CHANNEL_IDS)} шт\n"
+                f"📁 Кэш: {'✅' if cache_exists else '❌'} ({cache_size} байт)\n"
                 f"🔄 {bot_status}\n"
                 f"🏓 Самопинг: {ping_count} раз\n"
                 f"📝 В памяти: {len(processed_messages_cache)} сообщений\n\n"
@@ -681,6 +736,13 @@ def home():
     if len(DISCORD_CHANNEL_IDS) > 5:
         channels_info += f"<div class='info'><strong>И еще:</strong> {len(DISCORD_CHANNEL_IDS) - 5} каналов</div>"
     
+    # Информация о файле кэша
+    cache_exists = os.path.exists(CACHE_FILE)
+    alt_cache_exists = os.path.exists('./last_processed_ids.json')
+    cache_info = f"<div class='info'><strong>Файл кэша:</strong> {'✅ Существует' if cache_exists else '❌ Не найден'} (путь: {CACHE_FILE})</div>"
+    if alt_cache_exists:
+        cache_info += f"<div class='info'><strong>Альтернативный кэш:</strong> ✅ Существует</div>"
+    
     return f"""
     <html>
         <head>
@@ -707,6 +769,7 @@ def home():
                 <div class="info"><strong>В памяти:</strong> {len(processed_messages_cache)} сообщений</div>
                 <div class="info"><strong>Авто-статус:</strong> 📊 Каждые 5 часов</div>
                 <div class="info"><strong>Отслеживаю:</strong> {seeds_list}</div>
+                {cache_info}
                 <h4>📡 Отслеживаемые каналы:</h4>
                 {channels_info}
             </div>
@@ -773,10 +836,19 @@ if __name__ == '__main__':
     logger.info("📱 Вам в бота: Все стоки из всех каналов")
     logger.info("📢 В канал: Только стикеры при редких семенах")
     logger.info(f"🎯 Отслеживаю: {seeds_list}")
+    logger.info(f"📁 Путь к кэшу: {CACHE_FILE}")
     logger.info("🛡️ Защита от спама: Активна (2 сек между сообщениями)")
     logger.info("🧹 Умная очистка памяти: Активна")
     logger.info("🏓 Самопинг: Активен (каждые 8 минут)")
     logger.info("📊 Авто-статус: Каждые 5 часов")
+    
+    # Проверяем директорию /tmp/
+    try:
+        import tempfile
+        temp_dir = tempfile.gettempdir()
+        logger.info(f"📁 Временная директория системы: {temp_dir}")
+    except:
+        pass
     
     start_background_threads()
     
