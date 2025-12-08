@@ -62,8 +62,6 @@ TARGET_SEEDS = {
         'sticker_id': "CAACAgIAAxkBAAEP9hZpNtYLGgXJ5UmFIzEjQ6tL6jX-_QACrokAAk1ouUn1z9iCPYIanzYE",
         'emoji': '🌿',
         'display_name': 'Peppermint Vine'
-    }
-    # 🆕 Tomato УДАЛЕН после теста
      },
     # 🆕 ДОБАВЛЕН Tomato для тестирования (ПОСЛЕДНЕЕ СООБЩЕНИЕ - УДАЛИТЬ ПОСЛЕ ТЕСТА)
     'tomato': {
