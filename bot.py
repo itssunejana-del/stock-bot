@@ -4,10 +4,9 @@ import os
 import time
 import logging
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime
 import re
 import json
-from collections import defaultdict
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -63,7 +62,9 @@ TARGET_SEEDS = {
         'sticker_id': "CAACAgIAAxkBAAEP9hZpNtYLGgXJ5UmFIzEjQ6tL6jX-_QACrokAAk1ouUn1z9iCPYIanzYE",
         'emoji': '🌿',
         'display_name': 'Peppermint Vine'
-    },
+    }
+    # 🆕 Tomato УДАЛЕН после теста
+     },
     # 🆕 ДОБАВЛЕН Tomato для тестирования (ПОСЛЕДНЕЕ СООБЩЕНИЕ - УДАЛИТЬ ПОСЛЕ ТЕСТА)
     'tomato': {
         'keywords': ['tomato', 'томат', ':tomato'],
@@ -75,21 +76,12 @@ TARGET_SEEDS = {
 
 # 🆕 Глобальные переменные для множественных каналов
 last_processed_ids = {}  # Словарь: {channel_id: last_message_id}
-CACHE_FILE = '/tmp/last_processed_ids.json'  # Используем /tmp/ директорию (доступную для записи в Render)
-
-# 🆕 АНТИСПАМ ПЕРЕМЕННЫЕ
-last_sticker_time = {}  # {seed_name: timestamp}
-SEED_COOLDOWN = 300  # 5 минут между стикерами для одного семени
-last_message_time = {}  # {channel_id: timestamp}
-MESSAGE_COOLDOWN = 30  # 30 секунд между сообщениями в одном канале
-processed_messages_cache = set()
-recent_stickers = []  # Список последних отправленных стикеров
-MAX_RECENT_STICKERS = 10  # Максимальное количество запоминаемых стикеров
-
+CACHE_FILE = '/tmp/last_processed_ids.json'  # Используем /tmp/ директорию
 startup_time = datetime.now()
 channel_enabled = True
 bot_status = "🟢 Работает нормально"
 last_error = None
+processed_messages_cache = set()
 telegram_offset = 0
 ping_count = 0
 last_ping_time = None
@@ -98,7 +90,6 @@ found_seeds_count = {name: 0 for name in TARGET_SEEDS.keys()}
 def save_last_processed_ids():
     """Сохраняет последние обработанные ID для всех каналов"""
     try:
-        # Создаем словарь для сохранения
         save_data = {
             'last_processed_ids': last_processed_ids,
             'saved_at': datetime.now().isoformat()
@@ -107,7 +98,7 @@ def save_last_processed_ids():
         with open(CACHE_FILE, 'w') as f:
             json.dump(save_data, f, indent=2)
         
-        logger.info(f"💾 Сохранены last_processed_ids для {len(last_processed_ids)} каналов в {CACHE_FILE}")
+        logger.info(f"💾 Сохранены last_processed_ids для {len(last_processed_ids)} каналов")
         
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения кэша: {e}")
@@ -115,7 +106,6 @@ def save_last_processed_ids():
             alt_path = './last_processed_ids.json'
             with open(alt_path, 'w') as f:
                 json.dump({'last_processed_ids': last_processed_ids}, f)
-            logger.info(f"💾 Сохранено в альтернативный путь: {alt_path}")
         except Exception as alt_e:
             logger.error(f"❌ Ошибка альтернативного сохранения: {alt_e}")
 
@@ -126,7 +116,7 @@ def load_last_processed_ids():
             with open(CACHE_FILE, 'r') as f:
                 data = json.load(f)
                 loaded_ids = data.get('last_processed_ids', {})
-                logger.info(f"📂 Загружены last_processed_ids для {len(loaded_ids)} каналов из {CACHE_FILE}")
+                logger.info(f"📂 Загружены last_processed_ids для {len(loaded_ids)} каналов")
                 return loaded_ids
         
         alt_path = './last_processed_ids.json'
@@ -134,7 +124,7 @@ def load_last_processed_ids():
             with open(alt_path, 'r') as f:
                 data = json.load(f)
                 loaded_ids = data.get('last_processed_ids', {})
-                logger.info(f"📂 Загружены last_processed_ids для {len(loaded_ids)} каналов из {alt_path}")
+                logger.info(f"📂 Загружены last_processed_ids из альтернативного пути")
                 return loaded_ids
         
         logger.info("📂 Файл кэша не найден, начинаем с начала")
@@ -146,16 +136,13 @@ def load_last_processed_ids():
 
 def cleanup_memory_cache():
     """Умная очистка оперативной памяти"""
-    global processed_messages_cache, recent_stickers
+    global processed_messages_cache
     
     if len(processed_messages_cache) > 200:
         old_size = len(processed_messages_cache)
         recent_messages = list(processed_messages_cache)[-100:]
         processed_messages_cache = set(recent_messages)
         logger.info(f"🧹 Очистил кэш: {old_size} -> {len(processed_messages_cache)} сообщений")
-    
-    if len(recent_stickers) > MAX_RECENT_STICKERS:
-        recent_stickers = recent_stickers[-MAX_RECENT_STICKERS:]
 
 def self_pinger():
     """Самопинг чтобы Render не останавливал сервис"""
@@ -208,7 +195,7 @@ def send_telegram_message(chat_id, text, parse_mode="HTML"):
         return False
 
 def send_telegram_sticker(chat_id, sticker_id):
-    """Отправляет стикер в Telegram с защитой от лимитов"""
+    """Отправляет стикер в Telegram"""
     if not TELEGRAM_TOKEN or not chat_id:
         logger.error("❌ Не настроены переменные Telegram")
         return False
@@ -236,49 +223,26 @@ def send_telegram_sticker(chat_id, sticker_id):
         logger.error(f"❌ Ошибка подключения к Telegram: {e}")
         return False
 
-def send_to_channel(text=None, sticker_id=None, seed_name=None):
-    """🆕 УЛУЧШЕННАЯ отправка в канал с антиспам защитой"""
+def send_to_channel(text=None, sticker_id=None):
+    """Отправляет сообщение или стикер в ТЕЛЕГРАМ КАНАЛ"""
     if not channel_enabled:
         logger.info("⏸️ Канал отключен, сообщение не отправлено")
         return False
     
-    # 🆕 АНТИСПАМ: Проверка кулдауна для стикеров
-    if sticker_id and seed_name:
-        current_time = time.time()
-        last_time = last_sticker_time.get(seed_name, 0)
-        
-        # Проверяем, не отправляли ли мы недавно стикер этого семени
-        if current_time - last_time < SEED_COOLDOWN:
-            logger.info(f"⏸️ Кулдаун для {seed_name}: {SEED_COOLDOWN - int(current_time - last_time)} сек осталось")
-            return False
-        
-        # Обновляем время последнего стикера
-        last_sticker_time[seed_name] = current_time
-        
-        # Добавляем в список последних стикеров
-        sticker_record = {
-            'seed_name': seed_name,
-            'sticker_id': sticker_id,
-            'time': current_time
-        }
-        recent_stickers.append(sticker_record)
-        cleanup_memory_cache()
-    
-    # 🆕 Защита от слишком частых сообщений
+    # 🆕 ПРОСТАЯ защита от слишком частых сообщений - 1 секунда
     if not hasattr(send_to_channel, 'last_channel_message_time'):
         send_to_channel.last_channel_message_time = 0
     
     current_time = time.time()
-    time_since_last = current_time - send_to_channel.last_channel_message_time
     
-    if time_since_last < 2 and time_since_last >= 0:
-        wait_time = 2 - time_since_last
+    time_since_last = current_time - send_to_channel.last_channel_message_time
+    if time_since_last < 1 and time_since_last >= 0:
+        wait_time = 1 - time_since_last
         logger.info(f"⏸️ Защита от спама: жду {wait_time:.1f} сек")
         time.sleep(wait_time)
     
     send_to_channel.last_channel_message_time = current_time
-    
-    # Отправка
+        
     if sticker_id:
         return send_telegram_sticker(TELEGRAM_CHANNEL_ID, sticker_id)
     elif text:
@@ -305,14 +269,13 @@ def send_help_message(chat_id):
         f"🎯 <b>Отслеживаю семена:</b>\n"
         f"{seeds_list}\n\n"
         f"📡 <b>Мониторю каналы:</b> {len(DISCORD_CHANNEL_IDS)} шт\n"
-        f"🛡️ <b>Антиспам:</b> 1 стикер/5 мин на семя\n"
         f"🔄 Бот автоматически отслеживает стоки из нескольких Discord каналов."
     )
     send_telegram_message(chat_id, help_text)
 
 def send_bot_status(chat_id):
     """Отправляет статус бота"""
-    global bot_status, last_error, channel_enabled, ping_count, last_ping_time, found_seeds_count, last_processed_ids, recent_stickers
+    global bot_status, last_error, channel_enabled, ping_count, last_ping_time, found_seeds_count, last_processed_ids
     
     uptime = datetime.now() - startup_time
     hours = uptime.total_seconds() / 3600
@@ -331,16 +294,7 @@ def send_bot_status(chat_id):
     
     # Информация о файле кэша
     cache_exists = os.path.exists(CACHE_FILE)
-    alt_cache_exists = os.path.exists('./last_processed_ids.json')
-    cache_info = f"📁 Кэш: {'✅' if cache_exists else '❌'}{' (альт: ✅)' if alt_cache_exists else ''}"
-    
-    # Информация о последних стикерах
-    recent_stickers_info = f"📊 Последние стикеры: {len(recent_stickers)}"
-    if recent_stickers:
-        recent_stickers_info += "\n" + "\n".join([
-            f"{TARGET_SEEDS[s['seed_name']]['emoji']} {datetime.fromtimestamp(s['time']).strftime('%H:%M:%S')}"
-            for s in recent_stickers[-3:]
-        ])
+    cache_info = f"📁 Кэш: {'✅' if cache_exists else '❌'}"
     
     status_text = (
         f"📊 <b>Статус бота</b>\n\n"
@@ -351,8 +305,7 @@ def send_bot_status(chat_id):
         f"📡 Отслеживаю: {len(DISCORD_CHANNEL_IDS)} каналов\n"
         f"{cache_info}\n"
         f"🏓 Самопинг: {ping_count} раз (последний: {last_ping_str})\n"
-        f"📝 В памяти: {len(processed_messages_cache)} сообщений\n"
-        f"{recent_stickers_info}\n\n"
+        f"📝 В памяти: {len(processed_messages_cache)} сообщений\n\n"
         f"🎯 <b>Найдено семян:</b>\n"
         f"{seeds_stats}\n\n"
         f"📡 <b>Статус каналов:</b>\n" + "\n".join(channels_info)
@@ -393,10 +346,9 @@ def handle_telegram_command(chat_id, command, message=None):
             f"Автоматически мониторю <b>{len(DISCORD_CHANNEL_IDS)} Discord каналов</b> и присылаю уведомления о стоках.\n\n"
             "📱 <b>Вам в личные сообщения:</b> Все стоки (читабельный текст)\n"
             "📢 <b>В канал:</b> Только стикеры при редких семенах\n"
-            f"🛡️ <b>Антиспам:</b> 1 стикер в 5 минут на одно семя\n"
             "🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
             "💾 <b>Умный кэш:</b> Сохраняет состояние между перезапусками\n"
-            "🛡️ <b>Защита от спама:</b> Автоматические паузы между сообщениями\n"
+            "🛡️ <b>Защита от спама:</b> 1 сек между сообщениями\n"
             "📊 <b>Авто-статус:</b> Каждые 5 часов\n\n"
             f"🎯 <b>Отслеживаю семена:</b>\n"
             f"{seeds_list}\n\n"
@@ -516,7 +468,7 @@ def clean_ember_text_for_display(text):
     
     for line in lines:
         line = line.strip()
-        if line and ('x' in line or ':' in line or any(word in line.lower() for word in ['seeds', 'gear', 'alert', 'stock', 'seeds stock', 'eggs stock'])):
+        if line and ('x' in line or ':' in line or any(word in line.lower() for word in ['seeds', 'gear', 'alert', 'stock'])):
             cleaned_lines.append(line)
     
     return '\n'.join(cleaned_lines)
@@ -568,13 +520,17 @@ def format_ember_message_for_bot(message):
     return cleaned_text.strip()
 
 def check_ember_messages(messages):
-    """🆕 УЛУЧШЕННАЯ версия с антиспам защитой"""
+    """🆕 ПРОСТАЯ и НАДЕЖНАЯ версия на основе первоначального кода"""
     global last_processed_ids, bot_status, last_error, processed_messages_cache, found_seeds_count
     
     if not messages:
         return False
     
     try:
+        # 🆕 Сортируем по timestamp (время создания сообщения)
+        # Discord ID не всегда отражают реальное время, поэтому используем timestamp
+        messages.sort(key=lambda x: x.get('timestamp', ''))
+        
         found_any_seed = False
         
         # Инициализируем last_processed_ids при первом запуске
@@ -582,13 +538,7 @@ def check_ember_messages(messages):
             last_processed_ids = load_last_processed_ids()
             logger.info(f"📂 Загружены last_processed_ids для {len(last_processed_ids)} каналов")
         
-        # 🆕 Сортируем сообщения по времени (новые в конце)
-        messages.sort(key=lambda x: x.get('timestamp', ''))
-        
-        # 🆕 Словарь для хранения последних найденных семян
-        latest_seeds_by_channel = defaultdict(list)
-        
-        # Первый проход: собираем все семена из всех сообщений
+        # Обрабатываем ВСЕ сообщения по порядку
         for message in messages:
             try:
                 message_id = str(message.get('id', ''))
@@ -600,46 +550,34 @@ def check_ember_messages(messages):
                 # Создаем уникальный ключ для кэша
                 cache_key = f"{channel_id}:{message_id}"
                 
-                # Проверяем дубликаты в кэше памяти
+                # Проверяем дубликаты в кэше памяти (краткосрочная защита)
                 if cache_key in processed_messages_cache:
                     continue
                 
                 # Получаем информацию об авторе
                 author_info = message.get('author', {})
                 author_name = str(author_info.get('username', '')).lower()
-                author_global_name = str(author_info.get('global_name', '')).lower()
                 
-                # Проверяем, является ли автор ботом
+                # 🆕 ПРОСТАЯ проверка: отслеживаем ВСЕ сообщения от ботов
+                # Не ограничиваемся только Ember, так как могут быть разные боты
                 is_bot = message.get('author', {}).get('bot', False)
                 is_bot_like = 'bot' in author_name or 'бот' in author_name
                 
                 if not (is_bot or is_bot_like):
                     continue
                 
-                # Получаем текст сообщения
-                full_text = extract_all_text_from_message(message)
-                text_lower = full_text.lower()
-                
-                # Проверяем наличие семян
-                found_in_message = []
-                for seed_name, seed_config in TARGET_SEEDS.items():
-                    for keyword in seed_config['keywords']:
-                        if keyword in text_lower:
-                            found_in_message.append(seed_name)
-                            break
-                
-                # Добавляем найденные семена в список для этого канала
-                if found_in_message:
-                    latest_seeds_by_channel[channel_id].extend(found_in_message)
-                
                 # Добавляем в кэш памяти
                 processed_messages_cache.add(cache_key)
+                
+                # Получаем весь текст сообщения
+                full_text = extract_all_text_from_message(message)
+                text_lower = full_text.lower()
                 
                 # Форматируем для отправки боту
                 formatted_message = format_ember_message_for_bot(message)
                 
                 if formatted_message:
-                    # Отправляем сообщение боту (только текст)
+                    # 📱 В БОТА - отправляем ВСЕ сообщения от ботов
                     current_time = datetime.now().strftime('%H:%M:%S')
                     channel_short = channel_id[-6:] if len(channel_id) > 6 else channel_id
                     author_display = author_info.get('global_name') or author_info.get('username', 'Unknown')
@@ -651,40 +589,38 @@ def check_ember_messages(messages):
                     )
                     send_to_bot(bot_message)
                 
+                # 🔍 Проверяем наличие отслеживаемых семян
+                found_tracked_seeds = []
+                
+                for seed_name, seed_config in TARGET_SEEDS.items():
+                    for keyword in seed_config['keywords']:
+                        if keyword in text_lower:
+                            found_seeds_count[seed_name] += 1
+                            found_tracked_seeds.append(seed_config['display_name'])
+                            logger.info(f"🎯 ОБНАРУЖЕН {seed_name.upper()} в канале {channel_short}! Ключевое слово: '{keyword}'")
+                            
+                            # 📢 Отправляем стикер в канал НЕМЕДЛЕННО
+                            sticker_sent = send_to_channel(sticker_id=seed_config['sticker_id'])
+                            
+                            if sticker_sent:
+                                send_to_bot(f"✅ Стикер {seed_config['emoji']} отправлен в канал")
+                                logger.info(f"✅ Стикер о {seed_name} отправлен в канал!")
+                            else:
+                                send_to_bot(f"❌ Стикер {seed_config['emoji']} не отправлен в канал")
+                                logger.error(f"❌ Ошибка отправки стикера о {seed_name}")
+                            
+                            found_any_seed = True
+                            break  # Прерываем после первого найденного ключевого слова
+                
                 # Обновляем last_processed_id для этого канала
                 last_processed_ids[channel_id] = message_id
+                
+                # 🆕 Сохраняем кэш после каждого обработанного сообщения
+                save_last_processed_ids()
                 
             except Exception as e:
                 logger.error(f"❌ Ошибка обработки сообщения: {e}")
                 continue
-        
-        # 🆕 ВТОРОЙ ПРОХОД: отправляем стикеры только для УНИКАЛЬНЫХ семян из последних сообщений
-        for channel_id, seeds in latest_seeds_by_channel.items():
-            # Оставляем только уникальные семена (убираем дубли)
-            unique_seeds = list(set(seeds))
-            
-            for seed_name in unique_seeds:
-                seed_config = TARGET_SEEDS.get(seed_name)
-                if not seed_config:
-                    continue
-                
-                found_seeds_count[seed_name] += 1
-                channel_short = channel_id[-6:] if len(channel_id) > 6 else channel_id
-                logger.info(f"🎯 Найден {seed_name.upper()} в канале {channel_short}!")
-                
-                # Отправляем стикер в канал с антиспам защитой
-                sticker_sent = send_to_channel(sticker_id=seed_config['sticker_id'], seed_name=seed_name)
-                
-                if sticker_sent:
-                    send_to_bot(f"✅ Стикер {seed_config['emoji']} отправлен в канал")
-                    logger.info(f"✅ Стикер о {seed_name} отправлен в канал!")
-                    found_any_seed = True
-                else:
-                    # Если стикер не отправлен из-за кулдауна, логируем это
-                    logger.info(f"⏸️ Стикер {seed_name} не отправлен (кулдаун)")
-        
-        # Сохраняем кэш
-        save_last_processed_ids()
         
         bot_status = "🟢 Работает нормально"
         last_error = None
@@ -699,7 +635,7 @@ def check_ember_messages(messages):
         return False
 
 def monitor_discord():
-    """Основная функция мониторинга - для множества каналов"""
+    """Основная функция мониторинга - ПРОСТАЯ и НАДЕЖНАЯ"""
     logger.info(f"🔄 Запуск мониторинга {len(DISCORD_CHANNEL_IDS)} каналов Discord...")
     
     if not DISCORD_CHANNEL_IDS:
@@ -734,7 +670,8 @@ def monitor_discord():
                     time.sleep(300)
                     error_count = 0
             
-            time.sleep(30)
+            # 🆕 Уменьшаем интервал проверки для большей оперативности
+            time.sleep(15)  # Было 30 секунд, теперь 15
             
         except Exception as e:
             logger.error(f"💥 Критическая ошибка в мониторинге: {e}")
@@ -758,16 +695,11 @@ def health_monitor():
             seeds_stats = "\n".join([f"{TARGET_SEEDS[name]['emoji']} {TARGET_SEEDS[name]['display_name']}: {count} раз" 
                                    for name, count in found_seeds_count.items()])
             
-            # Проверяем файл кэша
-            cache_exists = os.path.exists(CACHE_FILE)
-            cache_size = os.path.getsize(CACHE_FILE) if cache_exists else 0
-            
             status_report = (
                 f"📊 <b>Авто-статус #{report_count}</b>\n"
                 f"⏰ Работает: {hours:.1f} часов\n"
                 f"📢 Канал: {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}\n"
                 f"📡 Каналов: {len(DISCORD_CHANNEL_IDS)} шт\n"
-                f"📁 Кэш: {'✅' if cache_exists else '❌'} ({cache_size} байт)\n"
                 f"🔄 {bot_status}\n"
                 f"🏓 Самопинг: {ping_count} раз\n"
                 f"📝 В памяти: {len(processed_messages_cache)} сообщений\n\n"
@@ -799,9 +731,7 @@ def home():
     if len(DISCORD_CHANNEL_IDS) > 5:
         channels_info += f"<div class='info'><strong>И еще:</strong> {len(DISCORD_CHANNEL_IDS) - 5} каналов</div>"
     
-    # Информация о файле кэша
-    cache_exists = os.path.exists(CACHE_FILE)
-    cache_info = f"<div class='info'><strong>Файл кэша:</strong> {'✅ Существует' if cache_exists else '❌ Не найден'} (путь: {CACHE_FILE})</div>"
+    cache_info = f"<div class='info'><strong>Файл кэша:</strong> {'✅ Существует' if os.path.exists(CACHE_FILE) else '❌ Не найден'}</div>"
     
     return f"""
     <html>
@@ -827,7 +757,7 @@ def home():
                 <div class="info"><strong>Каналов Discord:</strong> {len(DISCORD_CHANNEL_IDS)} шт</div>
                 <div class="info"><strong>Самопинг:</strong> 🏓 {ping_count} раз</div>
                 <div class="info"><strong>В памяти:</strong> {len(processed_messages_cache)} сообщений</div>
-                <div class="info"><strong>Антиспам:</strong> 5 мин между стикерами одного семени</div>
+                <div class="info"><strong>Проверка:</strong> Каждые 15 секунд</div>
                 <div class="info"><strong>Авто-статус:</strong> 📊 Каждые 5 часов</div>
                 <div class="info"><strong>Отслеживаю:</strong> {seeds_list}</div>
                 {cache_info}
@@ -847,10 +777,10 @@ def home():
                 <p>📱 <strong>Вам в бота:</strong> Все стоки из {len(DISCORD_CHANNEL_IDS)} каналов</p>
                 <p>📢 <strong>В канал:</strong> Только стикеры при редких семенах</p>
                 <p>🎯 <strong>Отслеживаю:</strong> {seeds_list}</p>
-                <p>🛡️ <strong>Антиспам:</strong> 1 стикер в 5 минут на одно семя</p>
+                <p>⚡ <strong>Оперативность:</strong> Проверка каждые 15 секунд</p>
                 <p>📡 <strong>Множественный мониторинг:</strong> Поддерживает несколько Discord каналов</p>
                 <p>💾 <strong>Умный кэш:</strong> Сохраняет состояние для каждого канала</p>
-                <p>🛡️ <strong>Защита от спама:</strong> Автоматические паузы между сообщениями</p>
+                <p>🛡️ <strong>Защита от спама:</strong> 1 сек между сообщениями</p>
                 <p>🏓 <strong>Самопинг:</strong> Каждые 8 минут</p>
                 <p>📊 <strong>Авто-статус:</b> Каждые 5 часов</p>
             </div>
@@ -893,13 +823,13 @@ def start_background_threads():
 if __name__ == '__main__':
     seeds_list = ", ".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
     
-    logger.info("🚀 ЗАПУСК БОТА С МНОЖЕСТВЕННЫМ МОНИТОРИНГОМ И АНТИСПАМОМ!")
+    logger.info("🚀 ЗАПУСК УПРОЩЕННОГО И НАДЕЖНОГО БОТА!")
     logger.info(f"📡 Мониторю: {len(DISCORD_CHANNEL_IDS)} каналов Discord")
     logger.info("📱 Вам в бота: Все стоки из всех каналов")
     logger.info("📢 В канал: Только стикеры при редких семенах")
     logger.info(f"🎯 Отслеживаю: {seeds_list}")
-    logger.info("🛡️ АНТИСПАМ: 5 минут между стикерами одного семени")
-    logger.info("🛡️ Защита от спама: Активна (2 сек между сообщениями)")
+    logger.info("⚡ Оперативность: Проверка каждые 15 секунд")
+    logger.info("🛡️ Защита от спама: 1 сек между сообщениями")
     logger.info("🧹 Умная очистка памяти: Активна")
     logger.info("🏓 Самопинг: Активен (каждые 8 минут)")
     logger.info("📊 Авто-статус: Каждые 5 часов")
@@ -909,22 +839,23 @@ if __name__ == '__main__':
     seeds_list_bot = "\n".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
     
     startup_msg_bot = (
-        f"🚀 <b>БОТ ЗАПУЩЕН С МНОЖЕСТВЕННЫМ МОНИТОРИНГОМ И АНТИСПАМОМ!</b>\n\n"
+        f"🚀 <b>БОТ ЗАПУЩЕН В УПРОЩЕННОМ РЕЖИМЕ!</b>\n\n"
         f"📡 <b>Мониторю:</b> {len(DISCORD_CHANNEL_IDS)} каналов Discord\n"
         f"📱 <b>Вам в бота:</b> Все стоки из всех каналов\n"
         f"📢 <b>В канал:</b> Только стикеры при редких семенах\n"
-        f"🛡️ <b>Антиспам:</b> 1 стикер в 5 минут на одно семя\n"
+        f"⚡ <b>Оперативность:</b> Проверка каждые 15 секунд\n"
         f"🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
         f"💾 <b>Умный кэш:</b> Сохраняет состояние для каждого канала\n"
-        f"🛡️ <b>Защита от спама:</b> Автоматические паузы между сообщениями\n"
+        f"🛡️ <b>Защита от спама:</b> 1 сек между сообщениями\n"
         f"🧹 <b>Очистка памяти:</b> Автоматическая оптимизация\n"
         f"📊 <b>Авто-статус:</b> Каждые 5 часов\n\n"
-        f"🎯 <b>ОБНОВЛЕННЫЙ список семян:</b>\n"
+        f"🎯 <b>ОТСЛЕЖИВАЮ СЕМЕНА:</b>\n"
         f"{seeds_list_bot}\n\n"
-        f"🔄 <b>Изменения:</b>\n"
-        f"• ❌ Убраны: Sunflower, Crimson Thorn\n"
-        f"• ✅ Добавлены: Peppermint Vine, Tomato (тестовый)\n"
-        f"• 🛡️ <b>Добавлен антиспам:</b> предотвращает множественные стикеры\n\n"
+        f"🔄 <b>Улучшения:</b>\n"
+        f"• ❌ Убраны: Sunflower, Crimson Thorn, Tomato (тестовый)\n"
+        f"• ✅ Добавлен: Peppermint Vine\n"
+        f"• ⚡ <b>Оперативность:</b> увеличенная частота проверок\n"
+        f"• 🛡️ <b>Простая защита:</b> без длительных кулдаунов\n\n"
         f"🎛️ <b>Команды:</b>\n"
         f"/start - Информация\n"
         f"/status - Статус\n" 
