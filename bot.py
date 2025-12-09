@@ -71,9 +71,8 @@ TARGET_SEEDS = {
     }
 }
 
-# 🆕 ИМЯ НОВОГО БОТА - УЗНАЙТЕ ИМЯ БОТА И УКАЖИТЕ ЗДЕСЬ
-# Поставьте имя бота как оно отображается в Discord
-BOT_NAME_TO_TRACK = os.getenv('BOT_NAME_TO_TRACK', 'testbot')  # Замените на реальное имя бота
+# 🆕 ИМЯ НОВОГО БОТА - укажите имя бота в переменной окружения
+BOT_NAME_TO_TRACK = os.getenv('BOT_NAME_TO_TRACK', 'Kiro')  # УКАЖИТЕ ИМЯ БОТА
 
 # 🆕 Глобальные переменные для множественных каналов
 last_processed_ids = {}  # Словарь: {channel_id: last_message_id}
@@ -87,6 +86,9 @@ telegram_offset = 0
 ping_count = 0
 last_ping_time = None
 found_seeds_count = {name: 0 for name in TARGET_SEEDS.keys()}
+
+# 🆕 СЛОВАРЬ ДЛЯ СТАТИСТИКИ ДУБЛЕЙ
+duplicate_stats = {}
 
 def save_last_processed_ids():
     """Сохраняет последние обработанные ID для всех каналов"""
@@ -125,9 +127,9 @@ def cleanup_memory_cache():
     """Умная очистка оперативной памяти"""
     global processed_messages_cache
     
-    if len(processed_messages_cache) > 200:
+    if len(processed_messages_cache) > 500:
         old_size = len(processed_messages_cache)
-        recent_messages = list(processed_messages_cache)[-100:]
+        recent_messages = list(processed_messages_cache)[-250:]
         processed_messages_cache = set(recent_messages)
         logger.info(f"🧹 Очистил кэш: {old_size} -> {len(processed_messages_cache)} сообщений")
 
@@ -216,7 +218,7 @@ def send_to_channel(text=None, sticker_id=None):
         logger.info("⏸️ Канал отключен, сообщение не отправлено")
         return False
     
-    # 🆕 ВОЗВРАЩАЕМ 2-СЕКУНДНУЮ ЗАЩИТУ ИЗ ПЕРВОНАЧАЛЬНОГО КОДА
+    # 🆕 ВОЗВРАЩАЕМ 2-СЕКУНДНУЮ ЗАЩИТУ
     if not hasattr(send_to_channel, 'last_channel_message_time'):
         send_to_channel.last_channel_message_time = 0
     
@@ -263,7 +265,7 @@ def send_help_message(chat_id):
 
 def send_bot_status(chat_id):
     """Отправляет статус бота"""
-    global bot_status, last_error, channel_enabled, ping_count, last_ping_time, found_seeds_count, last_processed_ids
+    global bot_status, last_error, channel_enabled, ping_count, last_ping_time, found_seeds_count, last_processed_ids, duplicate_stats
     
     uptime = datetime.now() - startup_time
     hours = uptime.total_seconds() / 3600
@@ -272,6 +274,15 @@ def send_bot_status(chat_id):
     
     seeds_stats = "\n".join([f"{TARGET_SEEDS[name]['emoji']} {TARGET_SEEDS[name]['display_name']}: {count} раз" 
                            for name, count in found_seeds_count.items()])
+    
+    # Информация о дублях
+    duplicate_info = ""
+    if duplicate_stats:
+        total_duplicates = sum(duplicate_stats.values())
+        duplicate_info = f"\n🔄 <b>Дубли:</b> {total_duplicates} раз пропущено\n"
+        for channel, count in duplicate_stats.items():
+            channel_short = channel[-6:] if len(channel) > 6 else channel
+            duplicate_info += f"📡 Канал {channel_short}: {count} дублей\n"
     
     # Информация о каналах
     channels_info = []
@@ -294,7 +305,8 @@ def send_bot_status(chat_id):
         f"📡 Каналов: {len(DISCORD_CHANNEL_IDS)} шт\n"
         f"{cache_info}\n"
         f"🏓 Самопинг: {ping_count} раз (последний: {last_ping_str})\n"
-        f"📝 В памяти: {len(processed_messages_cache)} сообщений\n\n"
+        f"📝 В памяти: {len(processed_messages_cache)} сообщений\n"
+        f"{duplicate_info}\n"
         f"🎯 <b>Найдено семян:</b>\n"
         f"{seeds_stats}\n\n"
         f"📡 <b>Статус каналов:</b>\n" + "\n".join(channels_info)
@@ -339,6 +351,7 @@ def handle_telegram_command(chat_id, command, message=None):
             "🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
             "💾 <b>Умный кэш:</b> Сохраняет состояние между перезапусками\n"
             "🛡️ <b>Защита от спама:</b> 2 сек между сообщениями\n"
+            "🔄 <b>Защита от дублей:</b> Улучшенная система кэширования\n"
             "📊 <b>Авто-статус:</b> Каждые 5 часов\n\n"
             f"🎯 <b>Отслеживаю семена:</b>\n"
             f"{seeds_list}\n\n"
@@ -510,8 +523,8 @@ def format_ember_message_for_bot(message):
     return cleaned_text.strip()
 
 def check_ember_messages(messages):
-    """ВОЗВРАЩАЕМ НАДЕЖНУЮ ЛОГИКУ (с отслеживанием НОВОГО бота)"""
-    global last_processed_ids, bot_status, last_error, processed_messages_cache, found_seeds_count
+    """ВОЗВРАЩАЕМ НАДЕЖНУЮ ЛОГИКУ (с УЛУЧШЕННОЙ защитой от дублей)"""
+    global last_processed_ids, bot_status, last_error, processed_messages_cache, found_seeds_count, duplicate_stats
     
     if not messages:
         return False
@@ -557,25 +570,27 @@ def check_ember_messages(messages):
             for message in channel_messages:
                 message_id = message['id']
                 
-                # Пропускаем сообщения которые УЖЕ обработаны (старые)
+                # 🆕 УЛУЧШЕННАЯ ПРОВЕРКА: Пропускаем сообщения которые УЖЕ обработаны
                 if int(message_id) <= int(last_processed_id_for_channel):
                     logger.debug(f"⏩ Пропускаем старое сообщение: {message_id} (последний: {last_processed_id_for_channel}) в канале {channel_id[-6:]}")
                     continue
                 
-                # Защита от дублирования в оперативной памяти
+                # 🆕 ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Кэш в памяти с подсчетом дублей
                 cache_key = f"{channel_id}:{message_id}"
                 if cache_key in processed_messages_cache:
-                    logger.debug(f"⏩ Пропускаем уже обработанное сообщение: {message_id} в канале {channel_id[-6:]}")
+                    # Считаем дубли
+                    if channel_id not in duplicate_stats:
+                        duplicate_stats[channel_id] = 0
+                    duplicate_stats[channel_id] += 1
+                    
+                    logger.info(f"🔄 ДУБЛЬ! Пропускаем уже обработанное сообщение: {message_id} в канале {channel_id[-6:]} (всего дублей: {duplicate_stats[channel_id]})")
                     continue
                 
                 author = message.get('author', {}).get('username', '')
                 author_lower = author.lower()
                 
-                # 🆕 ОТСЛЕЖИВАЕМ НОВОГО БОТА - укажите имя бота в переменной BOT_NAME_TO_TRACK
-                # Также отслеживаем сообщения от ботов (автоматически)
+                # 🆕 ОТСЛЕЖИВАЕМ НОВОГО БОТА
                 is_bot = message.get('author', {}).get('bot', False)
-                
-                # Проверяем совпадение с именем бота или это любой бот
                 bot_name_to_track_lower = BOT_NAME_TO_TRACK.lower()
                 
                 if (bot_name_to_track_lower in author_lower or 
@@ -646,11 +661,15 @@ def check_ember_messages(messages):
                     
                     send_to_bot(bot_message)
             
-            # Обновляем last_processed_id для этого канала на САМЫЙ НОВЫЙ
-            if int(newest_id_in_channel) > int(last_processed_id_for_channel):
-                last_processed_ids[channel_id] = newest_id_in_channel
-                save_last_processed_ids()
-                logger.info(f"💾 Обновлен last_processed_id для канала {channel_id[-6:]}: {newest_id_in_channel}")
+            # 🆕 ВАЖНО: Обновляем last_processed_id только если есть новые сообщения
+            # и только на САМЫЙ НОВЫЙ из обработанных
+            processed_message_ids = [int(m['id']) for m in channel_messages if int(m['id']) > int(last_processed_id_for_channel)]
+            if processed_message_ids:
+                max_processed_id = max(processed_message_ids)
+                if int(max_processed_id) > int(last_processed_id_for_channel):
+                    last_processed_ids[channel_id] = str(max_processed_id)
+                    save_last_processed_ids()
+                    logger.info(f"💾 Обновлен last_processed_id для канала {channel_id[-6:]}: {max_processed_id}")
         
         bot_status = "🟢 Работает нормально"
         last_error = None
@@ -702,7 +721,7 @@ def monitor_discord():
                     time.sleep(300)
                     error_count = 0
             
-            # ВОЗВРАЩАЕМ 30-СЕКУНДНЫЙ ИНТЕРВАЛ ИЗ ПЕРВОНАЧАЛЬНОГО КОДА
+            # ВОЗВРАЩАЕМ 30-СЕКУНДНЫЙ ИНТЕРВАЛ
             time.sleep(30)
             
         except Exception as e:
@@ -811,7 +830,7 @@ def home():
                 <p>📱 <strong>Вам в бота:</strong> Все стоки от {BOT_NAME_TO_TRACK} (и любых ботов)</p>
                 <p>📢 <strong>В канал:</strong> Только стикеры при редких семенах</p>
                 <p>🎯 <strong>Отслеживаю:</strong> {seeds_list}</p>
-                <p>🎯 <strong>Только боты:</strong> Игнорирую сообщения от пользователей</p>
+                <p>🛡️ <strong>Защита от дублей:</strong> Улучшенная система кэширования</p>
                 <p>📡 <strong>Множественный мониторинг:</strong> Поддерживает несколько Discord каналов</p>
                 <p>💾 <strong>Надежный кэш:</strong> Работает по ID сообщений</p>
                 <p>🛡️ <strong>Защита от спама:</strong> 2 сек между сообщениями</p>
@@ -859,16 +878,17 @@ def start_background_threads():
 if __name__ == '__main__':
     seeds_list = ", ".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
     
-    logger.info("🚀 ВОЗВРАЩАЕМ НАДЕЖНУЮ ЛОГИКУ ИЗ ПЕРВОНАЧАЛЬНОГО КОДА!")
+    logger.info("🚀 ВОЗВРАЩАЕМ НАДЕЖНУЮ ЛОГИКУ С УЛУЧШЕННОЙ ЗАЩИТОЙ ОТ ДУБЛЕЙ!")
     logger.info(f"📡 Мониторю: {len(DISCORD_CHANNEL_IDS)} каналов Discord")
-    logger.info(f"🤖 Отслеживаю бота: {BOT_NAME_TO_TRACK} (и любых ботов)")
+    logger.info(f"🤖 Отслеживаю бота: {BOT_NAME_TO_TRACK}")
     logger.info("📱 Вам в бота: Все стоки от ботов (читабельный текст)")
     logger.info("📢 В канал: Только стикеры при редких семенах")
     logger.info(f"🎯 Отслеживаю: {seeds_list}")
     logger.info("🍅 Томат для тестирования: Включен")
+    logger.info("🛡️ Улучшенная защита от дублей: Включена")
     logger.info("🛡️ Защита от спама: 2 сек между сообщениями")
     logger.info("⏱️ Частота проверки: Каждые 30 секунд")
-    logger.info("💾 Надежный кэш: Работает по ID сообщений")
+    logger.info("💾 Улучшенный кэш: 500 сообщений в памяти")
     logger.info("🧹 Умная очистка памяти: Активна")
     logger.info("🏓 Самопинг: Активен (каждые 8 минут)")
     logger.info("📊 Авто-статус: Каждые 5 часов")
@@ -878,33 +898,34 @@ if __name__ == '__main__':
     seeds_list_bot = "\n".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
     
     startup_msg_bot = (
-        f"🚀 <b>БОТ ЗАПУЩЕН С ОБНОВЛЕННОЙ ЛОГИКОЙ!</b>\n\n"
+        f"🚀 <b>БОТ ЗАПУЩЕН С УЛУЧШЕННОЙ ЗАЩИТОЙ ОТ ДУБЛЕЙ!</b>\n\n"
         f"📡 <b>Мониторю:</b> {len(DISCORD_CHANNEL_IDS)} каналов Discord\n"
         f"🤖 <b>Отслеживаю:</b> {BOT_NAME_TO_TRACK} (и любых ботов)\n"
         f"📱 <b>Вам в бота:</b> Все стоки от ботов (читабельный текст)\n"
         f"📢 <b>В канал:</b> Только стикеры при редких семенах\n"
+        f"🛡️ <b>Защита от дублей:</b> Улучшенная система кэширования\n"
         f"🛡️ <b>Защита от спама:</b> 2 сек между сообщениями\n"
         f"⏱️ <b>Частота проверки:</b> Каждые 30 секунд\n"
         f"🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
-        f"💾 <b>Надежный кэш:</b> Работает по ID сообщений\n"
+        f"💾 <b>Улучшенный кэш:</b> 500 сообщений в памяти\n"
         f"🧹 <b>Очистка памяти:</b> Автоматическая оптимизация\n"
         f"📊 <b>Авто-статус:</b> Каждые 5 часов\n\n"
         f"🎯 <b>ОТСЛЕЖИВАЮ СЕМЕНА:</b>\n"
         f"{seeds_list_bot}\n\n"
-        f"🔧 <b>Основные изменения:</b>\n"
-        f"• ✅ Возвращена логика отслеживания по ID сообщений\n"
-        f"• ✅ Отслеживаю ВСЕХ ботов (не только Ember)\n"
+        f"🔧 <b>Основные улучшения:</b>\n"
+        f"• ✅ Улучшенная защита от дублей с подсчетом статистики\n"
+        f"• ✅ Двойной кэш: в памяти + на диске\n"
+        f"• ✅ Умное обновление last_processed_id\n"
+        f"• ✅ Отслеживание ВСЕХ ботов\n"
         f"• ✅ Возвращен 30-секундный интервал проверки\n"
         f"• ✅ Возвращена 2-секундная защита от спама\n"
-        f"• ✅ Надежная система кэширования по ID сообщений\n"
-        f"• ✅ Поддержка нескольких каналов Discord\n"
         f"• 🍅 <b>Томат для теста:</b> Включен!\n\n"
         f"⚙️ <b>Конфигурация:</b>\n"
         f"• BOT_NAME_TO_TRACK: {BOT_NAME_TO_TRACK}\n"
         f"• DISCORD_CHANNEL_IDS: {len(DISCORD_CHANNEL_IDS)} каналов\n\n"
         f"🎛️ <b>Команды:</b>\n"
         f"/start - Информация\n"
-        f"/status - Статус\n" 
+        f"/status - Статус (показывает статистику дублей)\n" 
         f"/enable - Включить канал\n"
         f"/disable - Выключить канал\n"
         f"/help - Помощь"
