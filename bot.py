@@ -89,6 +89,10 @@ found_seeds_count = {name: 0 for name in TARGET_SEEDS.keys()}
 # 🆕 СЛОВАРЬ ДЛЯ СТАТИСТИКИ ДУБЛЕЙ
 duplicate_stats = {}
 
+# 🆕 ГЛОБАЛЬНЫЙ ТАЙМЕР ДЛЯ RATE LIMIT
+last_discord_request_time = 0
+DISCORD_RATE_LIMIT_DELAY = 1.2  # 1.2 секунды между запросами (Discord лимит: 50 запросов в секунду на бота)
+
 def save_last_processed_ids():
     """Сохраняет последние обработанные ID для всех каналов"""
     try:
@@ -456,8 +460,29 @@ def telegram_poller_safe():
             logger.error(f"💥 Ошибка в телеграм поллере: {e}")
             time.sleep(10)
 
+def safe_discord_request(url, headers, timeout=15):
+    """Безопасный запрос к Discord API с защитой от rate limits"""
+    global last_discord_request_time
+    
+    # Соблюдаем rate limit - ждем между запросами
+    current_time = time.time()
+    time_since_last = current_time - last_discord_request_time
+    
+    if time_since_last < DISCORD_RATE_LIMIT_DELAY:
+        wait_time = DISCORD_RATE_LIMIT_DELAY - time_since_last
+        time.sleep(wait_time)
+    
+    last_discord_request_time = time.time()
+    
+    try:
+        response = requests.get(url, headers=headers, timeout=timeout)
+        return response
+    except Exception as e:
+        logger.error(f"❌ Ошибка запроса к Discord: {e}")
+        return None
+
 def check_discord_channels():
-    """Проверяет доступность всех Discord каналов при старте"""
+    """Проверяет доступность всех Discord каналов при старте с защитой от rate limit"""
     logger.info("🔍 Проверяю доступность Discord каналов...")
     
     accessible_channels = []
@@ -468,7 +493,13 @@ def check_discord_channels():
             url = f"https://discord.com/api/v10/channels/{channel_id}"
             headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
             
-            response = requests.get(url, headers=headers, timeout=10)
+            # Используем безопасный запрос
+            response = safe_discord_request(url, headers, timeout=10)
+            
+            if not response:
+                inaccessible_channels.append(channel_id)
+                logger.error(f"❌ Канал {channel_id[-6:]}: ошибка запроса")
+                continue
             
             if response.status_code == 200:
                 try:
@@ -479,15 +510,54 @@ def check_discord_channels():
                 except json.JSONDecodeError:
                     logger.error(f"❌ Канал {channel_id[-6:]}: невалидный JSON в ответе")
                     inaccessible_channels.append(channel_id)
-            else:
+            
+            # ОБРАБОТКА RATE LIMIT (429)
+            elif response.status_code == 429:
+                try:
+                    data = response.json()
+                    retry_after = data.get('retry_after', 5.0)
+                    logger.warning(f"⏰ Discord rate limit для канала {channel_id[-6:]}. Жду {retry_after} сек")
+                    time.sleep(retry_after)
+                    
+                    # Пробуем еще раз после ожидания
+                    response = safe_discord_request(url, headers, timeout=10)
+                    if response and response.status_code == 200:
+                        try:
+                            channel_info = response.json()
+                            channel_name = channel_info.get('name', 'unknown')
+                            accessible_channels.append((channel_id, channel_name))
+                            logger.info(f"✅ Канал {channel_id[-6:]}: доступен после rate limit ({channel_name})")
+                        except json.JSONDecodeError:
+                            inaccessible_channels.append(channel_id)
+                    else:
+                        inaccessible_channels.append(channel_id)
+                        
+                except json.JSONDecodeError:
+                    logger.error(f"❌ Канал {channel_id[-6:]}: невалидный JSON в rate limit ответе")
+                    inaccessible_channels.append(channel_id)
+                    time.sleep(5)
+                    
+            # ОБРАБОТКА ДРУГИХ ОШИБОК
+            elif response.status_code == 404:
+                logger.error(f"❌ Канал {channel_id[-6:]} не найден (404)")
                 inaccessible_channels.append(channel_id)
-                logger.error(f"❌ Канал {channel_id[-6:]}: ошибка {response.status_code}")
+            elif response.status_code == 403:
+                logger.error(f"❌ Нет доступа к каналу {channel_id[-6:]} (403)")
+                inaccessible_channels.append(channel_id)
+            elif response.status_code == 401:
+                logger.error(f"❌ Неавторизован доступ к каналу {channel_id[-6:]} (401) - проверьте токен")
+                inaccessible_channels.append(channel_id)
+            else:
+                logger.error(f"❌ Ошибка Discord API для канала {channel_id[-6:]}: {response.status_code}")
+                inaccessible_channels.append(channel_id)
                 
-            time.sleep(1)
+            # Делаем паузу между проверками каналов
+            time.sleep(1.5)
             
         except Exception as e:
             inaccessible_channels.append(channel_id)
             logger.error(f"❌ Канал {channel_id[-6:]}: ошибка подключения - {e}")
+            time.sleep(2)
     
     # Отправляем отчет в Telegram
     if accessible_channels:
@@ -511,7 +581,7 @@ def check_discord_channels():
     
     send_to_bot(report)
     
-    # ВОЗВРАЩАЕМ список доступных каналов вместо изменения глобальной переменной
+    # ВОЗВРАЩАЕМ список доступных каналов
     return [ch_id for ch_id, _ in accessible_channels]
 
 def get_discord_messages(channel_ids):
@@ -520,11 +590,17 @@ def get_discord_messages(channel_ids):
     
     for channel_id in channel_ids:
         try:
-            url = f"https://discord.com/api/v10/channels/{channel_id}/messages?limit=10"
+            url = f"https://discord.com/api/v10/channels/{channel_id}/messages?limit=5"  # Уменьшили лимит с 10 до 5
             headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
             
             logger.debug(f"📡 Запрос к каналу {channel_id[-6:]}...")
-            response = requests.get(url, headers=headers, timeout=15)
+            
+            # Используем безопасный запрос
+            response = safe_discord_request(url, headers, timeout=15)
+            
+            if not response:
+                logger.error(f"❌ Ошибка запроса к каналу {channel_id[-6:]}")
+                continue
             
             # Проверяем статус код
             if response.status_code == 200:
@@ -541,20 +617,19 @@ def get_discord_messages(channel_ids):
                     
                 except json.JSONDecodeError as e:
                     logger.error(f"❌ Невалидный JSON от канала {channel_id[-6:]}: {e}")
-                    logger.debug(f"Ответ сервера: {response.text[:200]}")
                     continue
                     
             # ОБРАБОТКА RATE LIMIT (429)
             elif response.status_code == 429:
                 try:
                     data = response.json()
-                    retry_after = data.get('retry_after', 1.0)
+                    retry_after = data.get('retry_after', 5.0)
                     logger.warning(f"⏰ Discord rate limit для канала {channel_id[-6:]}. Жду {retry_after} сек")
                     time.sleep(retry_after)
                     
                     # Пробуем еще раз после ожидания
-                    response = requests.get(url, headers=headers, timeout=15)
-                    if response.status_code == 200:
+                    response = safe_discord_request(url, headers, timeout=15)
+                    if response and response.status_code == 200:
                         try:
                             messages = response.json()
                             for msg in messages:
@@ -565,11 +640,11 @@ def get_discord_messages(channel_ids):
                             logger.error(f"❌ Невалидный JSON после rate limit от канала {channel_id[-6:]}")
                             continue
                     else:
-                        logger.error(f"❌ Ошибка после rate limit {response.status_code} для канала {channel_id[-6:]}")
+                        logger.error(f"❌ Ошибка после rate limit для канала {channel_id[-6:]}")
                         
                 except json.JSONDecodeError:
                     logger.error(f"❌ Невалидный JSON в rate limit ответе от канала {channel_id[-6:]}")
-                    time.sleep(2)
+                    time.sleep(5)
                     
             # ОБРАБОТКА ДРУГИХ ОШИБОК
             elif response.status_code == 404:
@@ -577,27 +652,21 @@ def get_discord_messages(channel_ids):
             elif response.status_code == 403:
                 logger.error(f"❌ Нет доступа к каналу {channel_id[-6:]} (403)")
             elif response.status_code == 401:
-                logger.error(f"❌ Неавторизован доступ к каналу {channel_id[-6:]} (401) - проверьте токен")
+                logger.error(f"❌ Неавторизован доступ к каналу {channel_id[-6:]} (401)")
             else:
                 logger.error(f"❌ Ошибка Discord API для канала {channel_id[-6:]}: {response.status_code}")
-                logger.debug(f"Ответ: {response.text[:200]}")
                 
-            time.sleep(1)  # Пауза между запросами к разным каналам
-                
-        except requests.exceptions.Timeout:
-            logger.error(f"⏱️ Таймаут при подключении к каналу {channel_id[-6:]}")
+            # Увеличиваем паузу между запросами к разным каналам
             time.sleep(2)
-        except requests.exceptions.ConnectionError:
-            logger.error(f"🔌 Ошибка соединения с каналу {channel_id[-6:]}")
-            time.sleep(3)
+                
         except Exception as e:
             logger.error(f"💥 Неожиданная ошибка подключения к каналу {channel_id[-6:]}: {e}")
-            time.sleep(2)
+            time.sleep(3)
     
     return all_messages
 
-def clean_ember_text_for_display(text):
-    """Очищает текст для красивого отображения в Telegram"""
+def clean_discord_text_for_display(text):
+    """Очищает текст из Discord для красивого отображения в Telegram"""
     text = re.sub(r'<:[a-zA-Z0-9_]+:(\d+)>', '', text)
     text = re.sub(r'\*\*', '', text)
     text = re.sub(r'<t:\d+:[tR]>', '', text)
@@ -633,8 +702,8 @@ def extract_all_text_from_message(message):
     
     return all_text
 
-def format_ember_message_for_bot(message):
-    """Форматирует сообщение для Telegram бота"""
+def format_discord_message_for_bot(message):
+    """Форматирует сообщение из Discord для Telegram бота"""
     content = message.get('content', '')
     embeds = message.get('embeds', [])
     
@@ -654,12 +723,12 @@ def format_ember_message_for_bot(message):
             if field_name and field_value:
                 full_text += f"\n\n{field_name}:\n{field_value}"
     
-    cleaned_text = clean_ember_text_for_display(full_text)
+    cleaned_text = clean_discord_text_for_display(full_text)
     
     return cleaned_text.strip()
 
-def check_ember_messages(messages, channel_ids):
-    """ВОЗВРАЩАЕМ НАДЕЖНУЮ ЛОГИКУ (с УЛУЧШЕННОЙ защитой от дублей)"""
+def check_discord_messages(messages, channel_ids):
+    """Проверяет сообщения из Discord (отслеживает бота BOT_NAME_TO_TRACK и любых других ботов)"""
     global last_processed_ids, bot_status, last_error, processed_messages_cache, found_seeds_count, duplicate_stats
     
     if not messages:
@@ -716,17 +785,20 @@ def check_ember_messages(messages, channel_ids):
                 is_bot = message.get('author', {}).get('bot', False)
                 bot_name_to_track_lower = BOT_NAME_TO_TRACK.lower()
                 
-                if (bot_name_to_track_lower in author_lower or 
-                    BOT_NAME_TO_TRACK.lower() in author_lower or 
-                    is_bot):
+                # Отслеживаем ВСЕХ ботов, а не только одного конкретного
+                if is_bot:
                     logger.info(f"🤖 Сообщение от бота ({author}): {message_id} в канале {channel_id[-6:]}")
                 else:
-                    logger.debug(f"⏩ Пропускаем сообщение от {author}: {message_id} в канале {channel_id[-6:]}")
-                    continue
+                    # Также отслеживаем сообщения от указанного бота по имени, даже если не отмечен как бот
+                    if bot_name_to_track_lower in author_lower:
+                        logger.info(f"🎯 Сообщение от {BOT_NAME_TO_TRACK} ({author}): {message_id} в канале {channel_id[-6:]}")
+                    else:
+                        logger.debug(f"⏩ Пропускаем сообщение от {author}: {message_id} в канале {channel_id[-6:]}")
+                        continue
                 
                 processed_messages_cache.add(cache_key)
                 
-                formatted_message = format_ember_message_for_bot(message)
+                formatted_message = format_discord_message_for_bot(message)
                 
                 if formatted_message:
                     full_search_text = extract_all_text_from_message(message)
@@ -803,28 +875,38 @@ def monitor_discord():
     
     if not available_channels:
         logger.error("❌ Нет доступных каналов для мониторинга!")
-        send_to_bot("❌ <b>ОШИБКА:</b> Нет доступных Discord каналов для мониторинга!\nПроверьте настройки.")
+        send_to_bot("❌ <b>ОШИБКА:</b> Нет доступных Discord каналов для мониторинга!\nПроверьте настройки и подождите 10 минут (rate limit).")
         
-        # Периодически проверяем доступность каналов
-        while True:
-            logger.info("🔄 Проверяю доступность каналов через 5 минут...")
-            time.sleep(300)  # 5 минут
+        # Ждем 10 минут для сброса rate limit, потом пробуем еще раз
+        logger.info("⏰ Жду 10 минут для сброса rate limit Discord...")
+        time.sleep(600)
+        
+        available_channels = check_discord_channels()
+        
+        if not available_channels:
+            logger.error("❌ Все еще нет доступных каналов после ожидания!")
+            send_to_bot("🚨 <b>КРИТИЧЕСКАЯ ОШИБКА:</b> Discord каналы недоступны даже после ожидания.\nПроверьте токен и права бота.")
             
-            available_channels = check_discord_channels()
-            if available_channels:
-                logger.info(f"✅ Каналы доступны ({len(available_channels)} шт), возобновляю мониторинг...")
-                break
+            # Переходим в режим периодической проверки
+            while True:
+                logger.info("🔄 Проверяю доступность каналов через 15 минут...")
+                time.sleep(900)  # 15 минут
+                
+                available_channels = check_discord_channels()
+                if available_channels:
+                    logger.info(f"✅ Каналы доступны ({len(available_channels)} шт), возобновляю мониторинг...")
+                    break
     
     logger.info(f"🔄 Запуск мониторинга {len(available_channels)} каналов Discord...")
-    logger.info(f"🤖 Отслеживаю бота: {BOT_NAME_TO_TRACK}")
+    logger.info(f"🤖 Отслеживаю: {BOT_NAME_TO_TRACK} и ВСЕХ ботов")
     logger.info("⏰ АДАПТИВНЫЙ РЕЖИМ: Интенсивный мониторинг ТОЛЬКО во время стоков")
     
     error_count = 0
     max_errors = 10
     
     # 🆕 НАСТРОЙКИ АДАПТИВНОГО МОНИТОРИНГА
-    INTENSIVE_MONITORING_INTERVAL = 15  # секунд в интенсивном режиме
-    NORMAL_MONITORING_INTERVAL = 60     # секунд в обычном режиме
+    INTENSIVE_MONITORING_INTERVAL = 20  # Увеличили с 15 до 20 секунд в интенсивном режиме
+    NORMAL_MONITORING_INTERVAL = 90     # Увеличили с 60 до 90 секунд в обычном режиме
     
     while True:
         try:
@@ -861,7 +943,7 @@ def monitor_discord():
             messages = get_discord_messages(available_channels)
             
             if messages:
-                found_any_seed = check_ember_messages(messages, available_channels)
+                found_any_seed = check_discord_messages(messages, available_channels)
                 cleanup_memory_cache()
                 
                 if found_any_seed:
@@ -880,9 +962,9 @@ def monitor_discord():
             error_count += 1
             
             if error_count >= max_errors:
-                send_to_bot(f"🚨 <b>Критическая ошибка!</b>\nВ мониторинге:\n<code>{e}</code>\n\nПерезапускаюсь через 5 минут...")
-                logger.error(f"🚨 Слишком много ошибок ({error_count}/{max_errors}), перезапуск через 5 минут...")
-                time.sleep(300)
+                send_to_bot(f"🚨 <b>Критическая ошибка!</b>\nВ мониторинге:\n<code>{e}</code>\n\nПерезапускаюсь через 10 минут...")
+                logger.error(f"🚨 Слишком много ошибок ({error_count}/{max_errors}), перезапуск через 10 минут...")
+                time.sleep(600)
                 error_count = 0
             else:
                 time.sleep(60)
@@ -985,17 +1067,17 @@ def home():
             <div class="commands">
                 <h3>🤖 Логика работы</h3>
                 <p>📱 <strong>Вам в бота:</strong> Все стоки от {BOT_NAME_TO_TRACK} (и любых ботов)</p>
-                <p>📢 <strong>В канал:</strong> Только стикеры при редких семенах</p>
+                <p>📢 <strong>В канал:</b> Только стикеры при редких семенах</p>
                 <p>🎯 <strong>Отслеживаю:</strong> {seeds_list}</p>
                 <p>⏰ <strong>Адаптивный режим:</strong> Интенсивный мониторинг ТОЛЬКО во время стоков</p>
-                <p>⚡ <strong>Интенсивный:</strong> Каждые 15 сек (00:00-01:15 каждой 5-й минуты)</p>
-                <p>🐌 <strong>Обычный:</strong> Каждые 60 сек (в остальное время)</p>
+                <p>⚡ <strong>Интенсивный:</strong> Каждые 20 сек (00:00-01:15 каждой 5-й минуты)</p>
+                <p>🐌 <strong>Обычный:</strong> Каждые 90 сек (в остальное время)</p>
                 <p>🔍 <strong>Диагностика:</strong> Автоматическая проверка каналов</p>
-                <p>📡 <strong>Rate limit защита:</strong> Обработка ошибок Discord API 429</p>
+                <p>📡 <strong>Rate limit защита:</strong> Улучшенная обработка ошибок Discord API</p>
                 <p>💾 <strong>Надежный кэш:</strong> Работает по ID сообщений</p>
                 <p>🛡️ <strong>Защита от спама:</strong> 2 сек между сообщениями</p>
                 <p>🏓 <strong>Самопинг:</strong> Каждые 8 минут</p>
-                <p>📊 <strong>Авто-статус:</b> Каждые 5 часов</p>
+                <p>📊 <strong>Авто-статус:</strong> Каждые 5 часов</p>
             </div>
         </body>
     </html>
@@ -1036,18 +1118,18 @@ def start_background_threads():
 if __name__ == '__main__':
     seeds_list = ", ".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
     
-    logger.info("🚀 БОТ С АДАПТИВНЫМ МОНИТОРИНГОМ И ДИАГНОСТИКОЙ!")
+    logger.info("🚀 БОТ С УЛУЧШЕННОЙ ЗАЩИТОЙ ОТ RATE LIMITS!")
     logger.info(f"📡 Всего каналов: {len(DISCORD_CHANNEL_IDS)}")
-    logger.info(f"🤖 Отслеживаю бота: {BOT_NAME_TO_TRACK}")
+    logger.info(f"🤖 Отслеживаю: {BOT_NAME_TO_TRACK} и ВСЕХ ботов")
     
     logger.info("📱 Вам в бота: Все стоки от ботов (читабельный текст)")
     logger.info("📢 В канал: Только стикеры при редких семенах")
-    logger.info(f"🎯 Отслеживаю: {seeds_list}")
+    logger.info(f"🎯 Отслеживаю семена: {seeds_list}")
     logger.info("⏰ Адаптивный режим: Интенсивный ТОЛЬКО во время стоков (00:00-01:15 каждой 5-й минуты)")
-    logger.info("⚡ Интенсивный режим: Каждые 15 секунд")
-    logger.info("🐌 Обычный режим: Каждые 60 секунд")
+    logger.info("⚡ Интенсивный режим: Каждые 20 секунд (увеличено для защиты от rate limits)")
+    logger.info("🐌 Обычный режим: Каждые 90 секунд (увеличено для защиты от rate limits)")
     logger.info("🔍 Диагностика каналов: Включена")
-    logger.info("🛡️ Rate limit защита: Включена")
+    logger.info("🛡️ Rate limit защита: Улучшенная система с таймерами")
     logger.info("🛡️ Защита от дублей: Включена")
     logger.info("💾 Улучшенный кэш: 500 сообщений в памяти")
     logger.info("🧹 Умная очистка памяти: Активна")
@@ -1059,23 +1141,27 @@ if __name__ == '__main__':
     seeds_list_bot = "\n".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
     
     startup_msg_bot = (
-        f"🚀 <b>БОТ ЗАПУЩЕН С ДИАГНОСТИКОЙ КАНАЛОВ!</b>\n\n"
-        f"📡 <b>Мониторю:</b> {len(DISCORD_CHANNEL_IDS)} каналов Discord (проверяю доступность...)\n"
-        f"🤖 <b>Отслеживаю:</b> {BOT_NAME_TO_TRACK} (и любых ботов)\n"
+        f"🚀 <b>БОТ ЗАПУЩЕН С УЛУЧШЕННОЙ ЗАЩИТОЙ ОТ RATE LIMITS!</b>\n\n"
+        f"📡 <b>Мониторю:</b> {len(DISCORD_CHANNEL_IDS)} каналов Discord\n"
+        f"🤖 <b>Отслеживаю:</b> {BOT_NAME_TO_TRACK} и ВСЕХ ботов\n"
         f"📱 <b>Вам в бота:</b> Все стоки от ботов (читабельный текст)\n"
         f"📢 <b>В канал:</b> Только стикеры при редких семенах\n"
         f"⏰ <b>Адаптивный режим:</b> Интенсивный мониторинг ТОЛЬКО во время стоков\n"
-        f"⚡ <b>Интенсивный:</b> 15 сек (00:00-01:15 каждой 5-й минуты)\n"
-        f"🐌 <b>Обычный:</b> 60 сек (в остальное время)\n"
+        f"⚡ <b>Интенсивный:</b> 20 сек (00:00-01:15 каждой 5-й минуты)\n"
+        f"🐌 <b>Обычный:</b> 90 сек (в остальное время)\n"
         f"🔍 <b>Диагностика:</b> Автоматическая проверка каналов\n"
-        f"🛡️ <b>Обработка ошибок:</b> Улучшенная система\n"
+        f"🛡️ <b>Защита от rate limits:</b> Улучшенная система с таймерами\n"
         f"🛡️ <b>Защита от дублей:</b> Улучшенная система кэширования\n"
         f"🛡️ <b>Защита от спама:</b> 2 сек между сообщениями\n\n"
         f"🎯 <b>ОТСЛЕЖИВАЮ СЕМЕНА:</b>\n"
         f"{seeds_list_bot}\n\n"
+        f"⚙️ <b>Конфигурация:</b>\n"
+        f"• BOT_NAME_TO_TRACK: {BOT_NAME_TO_TRACK}\n"
+        f"• DISCORD_CHANNEL_IDS: {len(DISCORD_CHANNEL_IDS)} каналов\n"
+        f"• RATE_LIMIT_DELAY: {DISCORD_RATE_LIMIT_DELAY} сек между запросами\n\n"
         f"🎛️ <b>Команды:</b>\n"
         f"/start - Информация\n"
-        f"/status - Статус (показывает режим мониторинга)\n" 
+        f"/status - Статус (показывает режим мониторига)\n" 
         f"/enable - Включить канал\n"
         f"/disable - Выключить канал\n"
         f"/help - Помощь"
