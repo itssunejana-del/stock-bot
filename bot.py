@@ -19,20 +19,10 @@ TELEGRAM_CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')
 TELEGRAM_BOT_CHAT_ID = os.getenv('TELEGRAM_BOT_CHAT_ID')
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 
-# 🆕 МНОЖЕСТВЕННЫЕ КАНАЛЫ - получаем список ID
-DISCORD_CHANNEL_IDS_STR = os.getenv('DISCORD_CHANNEL_IDS', '')
-if DISCORD_CHANNEL_IDS_STR:
-    DISCORD_CHANNEL_IDS = [ch.strip() for ch in DISCORD_CHANNEL_IDS_STR.split(',') if ch.strip()]
-    logger.info(f"📡 Настроено {len(DISCORD_CHANNEL_IDS)} каналов для мониторинга")
-else:
-    # Для обратной совместимости
-    DISCORD_CHANNEL_ID = os.getenv('DISCORD_CHANNEL_ID')
-    if DISCORD_CHANNEL_ID:
-        DISCORD_CHANNEL_IDS = [DISCORD_CHANNEL_ID]
-        logger.info(f"📡 Использую один канал (старая конфигурация)")
-    else:
-        DISCORD_CHANNEL_IDS = []
-        logger.error("❌ Не указаны каналы Discord!")
+# 🆕 МНОЖЕСТВЕННЫЕ КАНАЛЫ
+DISCORD_CHANNEL_IDS_STR = os.getenv('DISCORD_CHANNEL_IDS', '917417,381036,446956')
+DISCORD_CHANNEL_IDS = [ch.strip() for ch in DISCORD_CHANNEL_IDS_STR.split(',') if ch.strip()]
+logger.info(f"📡 Настроено {len(DISCORD_CHANNEL_IDS)} каналов для мониторинга")
 
 RENDER_SERVICE_URL = os.getenv('RENDER_SERVICE_URL', 'https://stock-bot-cj4s.onrender.com')
 
@@ -55,27 +45,15 @@ TARGET_SEEDS = {
         'sticker_id': "CAACAgIAAxkBAAEPwjJpFDhW_6Vu29vF7DrTHFBcSf_WIAAC1XkAAkCXoUgr50G4SlzwrzYE",
         'emoji': '🦓',
         'display_name': 'Zebrazinkle'
-    },
-    'peppermint_vine': {
-        'keywords': ['peppermint vine', 'peppermintvine', ':peppermintvine', 'перечная лоза', 'перечная'],
-        'sticker_id': "CAACAgIAAxkBAAEP9hZpNtYLGgXJ5UmFIzEjQ6tL6jX-_QACrokAAk1ouUn1z9iCPYIanzYE",
-        'emoji': '🌿',
-        'display_name': 'Peppermint Vine'
-    },
-    'tomato': {
-        'keywords': ['tomato', 'томат', ':tomato'],
-        'sticker_id': "CAACAgIAAxkBAAEPtFBpCrZ_mxXMfMmrjTZkBHN3Tpn9OAACf3sAAoEeWUgkKobs-st7ojYE",
-        'emoji': '🍅',
-        'display_name': 'Tomato'
     }
 }
 
 # 🆕 ИМЯ БОТА
 BOT_NAME_TO_TRACK = os.getenv('BOT_NAME_TO_TRACK', 'Kiro')
 
-# 🆕 Глобальные переменные для множественных каналов
-last_processed_ids = {}  # Словарь: {channel_id: last_message_id}
-CACHE_FILE = '/tmp/last_processed_ids.json'  # Используем /tmp/ директорию
+# Глобальные переменные
+last_processed_ids = {}
+CACHE_FILE = '/tmp/last_processed_ids.json'
 startup_time = datetime.now()
 channel_enabled = True
 bot_status = "🟢 Работает нормально"
@@ -86,624 +64,161 @@ ping_count = 0
 last_ping_time = None
 found_seeds_count = {name: 0 for name in TARGET_SEEDS.keys()}
 
-# 🆕 СЛОВАРЬ ДЛЯ СТАТИСТИКИ ДУБЛЕЙ
-duplicate_stats = {}
-
-# 🆕 ГЛОБАЛЬНЫЙ ТАЙМЕР ДЛЯ RATE LIMIT
-last_discord_request_time = 0
-DISCORD_RATE_LIMIT_DELAY = 1.2  # 1.2 секунды между запросами (Discord лимит: 50 запросов в секунду на бота)
-
 def save_last_processed_ids():
-    """Сохраняет последние обработанные ID для всех каналов"""
+    """Сохраняет последние обработанные ID"""
     try:
         save_data = {
             'last_processed_ids': last_processed_ids,
             'saved_at': datetime.now().isoformat()
         }
-        
         with open(CACHE_FILE, 'w') as f:
             json.dump(save_data, f, indent=2)
-        
-        logger.info(f"💾 Сохранены last_processed_ids для {len(last_processed_ids)} каналов")
-        
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения кэша: {e}")
 
 def load_last_processed_ids():
-    """Загружает последние обработанные ID для всех каналов"""
+    """Загружает последние обработанные ID"""
     try:
         if os.path.exists(CACHE_FILE):
             with open(CACHE_FILE, 'r') as f:
                 data = json.load(f)
-                loaded_ids = data.get('last_processed_ids', {})
-                logger.info(f"📂 Загружены last_processed_ids для {len(loaded_ids)} каналов")
-                return loaded_ids
-        
-        logger.info("📂 Файл кэша не найден, начинаем с начала")
+                return data.get('last_processed_ids', {})
         return {}
-        
     except Exception as e:
         logger.error(f"❌ Ошибка загрузки кэша: {e}")
         return {}
 
-def cleanup_memory_cache():
-    """Умная очистка оперативной памяти"""
-    global processed_messages_cache
-    
-    if len(processed_messages_cache) > 500:
-        old_size = len(processed_messages_cache)
-        recent_messages = list(processed_messages_cache)[-250:]
-        processed_messages_cache = set(recent_messages)
-        logger.info(f"🧹 Очистил кэш: {old_size} -> {len(processed_messages_cache)} сообщений")
-
 def self_pinger():
     """Самопинг чтобы Render не останавливал сервис"""
     global ping_count, last_ping_time
-    
-    logger.info("🔄 Запускаю самопинг...")
-    
     time.sleep(30)
     
     while True:
         try:
             ping_count += 1
             last_ping_time = datetime.now()
-            logger.info(f"🏓 Самопинг #{ping_count}...")
-            
             response = requests.get(f"{RENDER_SERVICE_URL}/", timeout=10)
             if response.status_code == 200:
-                logger.info("✅ Самопинг успешен - сервис активен")
+                logger.info(f"🏓 Самопинг #{ping_count} успешен")
             else:
                 logger.warning(f"⚠️ Самопинг: статус {response.status_code}")
         except Exception as e:
             logger.error(f"❌ Ошибка самопинга: {e}")
-        
-        logger.info("💤 Ожидаю 8 минут до следующего самопинга...")
         time.sleep(480)
 
 def send_telegram_message(chat_id, text, parse_mode="HTML"):
-    """Отправляет сообщение в указанный чат/канал"""
+    """Отправляет сообщение в Telegram"""
     if not TELEGRAM_TOKEN or not chat_id:
-        logger.error("❌ Не настроены переменные Telegram")
         return False
         
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        data = {
-            "chat_id": chat_id, 
-            "text": text,
-            "parse_mode": parse_mode
-        }
+        data = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
         response = requests.post(url, data=data, timeout=15)
-        
-        if response.status_code == 200:
-            logger.info(f"📱 Отправлено в Telegram ({chat_id}): {text[:100]}...")
-            return True
-        else:
-            logger.error(f"❌ Ошибка Telegram {response.status_code}: {response.text}")
-            return False
-    except Exception as e:
-        logger.error(f"❌ Ошибка подключения к Telegram: {e}")
+        return response.status_code == 200
+    except Exception:
         return False
 
 def send_telegram_sticker(chat_id, sticker_id):
     """Отправляет стикер в Telegram"""
     if not TELEGRAM_TOKEN or not chat_id:
-        logger.error("❌ Не настроены переменные Telegram")
         return False
         
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendSticker"
-        data = {
-            "chat_id": chat_id, 
-            "sticker": sticker_id
-        }
+        data = {"chat_id": chat_id, "sticker": sticker_id}
         response = requests.post(url, data=data, timeout=15)
-        
-        if response.status_code == 200:
-            logger.info(f"📱 Отправлен стикер в Telegram ({chat_id})")
-            return True
-        elif response.status_code == 429:
-            retry_after = response.json().get('parameters', {}).get('retry_after', 30)
-            logger.warning(f"⚠️ Лимит Telegram, жду {retry_after} сек")
-            time.sleep(retry_after)
-            return False
-        else:
-            logger.error(f"❌ Ошибка отправки стикера {response.status_code}: {response.text}")
-            return False
-    except Exception as e:
-        logger.error(f"❌ Ошибка подключения к Telegram: {e}")
+        return response.status_code == 200
+    except Exception:
         return False
 
 def send_to_channel(text=None, sticker_id=None):
-    """Отправляет сообщение или стикер в ТЕЛЕГРАМ КАНАЛ"""
+    """Отправляет сообщение или стикер в канал"""
     if not channel_enabled:
-        logger.info("⏸️ Канал отключен, сообщение не отправлено")
         return False
     
-    if not hasattr(send_to_channel, 'last_channel_message_time'):
-        send_to_channel.last_channel_message_time = 0
-    
-    current_time = time.time()
-    
-    time_since_last = current_time - send_to_channel.last_channel_message_time
-    if time_since_last < 2 and time_since_last >= 0:
-        wait_time = 2 - time_since_last
-        logger.info(f"⏸️ Защита от спама: жду {wait_time:.1f} сек")
-        time.sleep(wait_time)
-    
-    send_to_channel.last_channel_message_time = current_time
-        
     if sticker_id:
         return send_telegram_sticker(TELEGRAM_CHANNEL_ID, sticker_id)
     elif text:
         return send_telegram_message(TELEGRAM_CHANNEL_ID, text)
-    else:
-        return False
+    return False
 
 def send_to_bot(text):
-    """Отправляет сообщение в ТЕЛЕГРАМ БОТА"""
+    """Отправляет сообщение в бота"""
     return send_telegram_message(TELEGRAM_BOT_CHAT_ID, text)
 
-def send_help_message(chat_id):
-    """Отправляет сообщение со списком команд"""
-    seeds_list = "\n".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
+def test_discord_connection():
+    """Тестирует подключение к Discord"""
+    if not DISCORD_TOKEN:
+        logger.error("❌ Discord токен не установлен!")
+        return False
     
-    help_text = (
-        f"🤖 <b>Бот мониторинга Grow a Garden</b>\n\n"
-        f"📋 <b>Доступные команды:</b>\n"
-        f"/start - Начать работу\n"
-        f"/status - Статус бота\n" 
-        f"/enable - Включить уведомления в канал\n"
-        f"/disable - Выключить уведомления в канал\n"
-        f"/help - Показать это сообщение\n\n"
-        f"🎯 <b>Отслеживаю семена:</b>\n"
-        f"{seeds_list}\n\n"
-        f"🤖 <b>Отслеживаю бота:</b> {BOT_NAME_TO_TRACK}\n"
-        f"📡 <b>Мониторю каналы:</b> {len(DISCORD_CHANNEL_IDS)} шт\n"
-        f"⏰ <b>Режим:</b> Адаптивный мониторинг (интенсивный во время стоков)\n"
-        f"🔄 Бот автоматически отслеживает стоки из нескольких Discord каналов."
-    )
-    send_telegram_message(chat_id, help_text)
-
-def send_bot_status(chat_id):
-    """Отправляет статус бота"""
-    global bot_status, last_error, channel_enabled, ping_count, last_ping_time, found_seeds_count, last_processed_ids, duplicate_stats
+    headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
     
-    uptime = datetime.now() - startup_time
-    hours = uptime.total_seconds() / 3600
-    
-    last_ping_str = "Еще не было" if not last_ping_time else last_ping_time.strftime('%H:%M:%S')
-    
-    seeds_stats = "\n".join([f"{TARGET_SEEDS[name]['emoji']} {TARGET_SEEDS[name]['display_name']}: {count} раз" 
-                           for name, count in found_seeds_count.items()])
-    
-    duplicate_info = ""
-    if duplicate_stats:
-        total_duplicates = sum(duplicate_stats.values())
-        duplicate_info = f"\n🔄 <b>Дубли:</b> {total_duplicates} раз пропущено\n"
-        for channel, count in duplicate_stats.items():
-            channel_short = channel[-6:] if len(channel) > 6 else channel
-            duplicate_info += f"📡 Канал {channel_short}: {count} дублей\n"
-    
-    channels_info = []
-    for channel_id in DISCORD_CHANNEL_IDS:
-        last_id = last_processed_ids.get(channel_id, 'Нет данных')
-        channel_short = channel_id[-6:] if len(channel_id) > 6 else channel_id
-        channels_info.append(f"📡 Канал {channel_short}: {last_id}")
-    
-    cache_exists = os.path.exists(CACHE_FILE)
-    cache_info = f"📁 Кэш: {'✅' if cache_exists else '❌'}"
-    
-    # Информация о текущем режиме мониторинга
-    current_time = datetime.now()
-    current_minute = current_time.minute
-    current_second = current_time.second
-    is_stock_minute = current_minute % 5 == 0
-    
-    if is_stock_minute and current_second < 75:
-        monitoring_mode = "⚡ ИНТЕНСИВНЫЙ (15 сек) - стоковая минута"
-        time_in_stock = f"{current_second} сек"
-    else:
-        monitoring_mode = "🐌 ОБЫЧНЫЙ (60 сек)"
-        # Вычисляем до следующего стока
-        next_stock_minute = ((current_minute // 5) * 5) + 5
-        if next_stock_minute >= 60:
-            next_stock_minute = 0
-        seconds_to_next_stock = ((next_stock_minute - current_minute) % 60) * 60 - current_second
-        if seconds_to_next_stock < 0:
-            seconds_to_next_stock += 3600
-        time_in_stock = f"через {seconds_to_next_stock//60}:{seconds_to_next_stock%60:02d}"
-    
-    status_text = (
-        f"📊 <b>Статус бота</b>\n\n"
-        f"{bot_status}\n"
-        f"⏰ Время работы: {hours:.1f} часов\n"
-        f"📅 Запущен: {startup_time.strftime('%d.%m.%Y %H:%M')}\n"
-        f"📢 Канал: {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}\n"
-        f"🤖 Отслеживаю: {BOT_NAME_TO_TRACK}\n"
-        f"📡 Каналов: {len(DISCORD_CHANNEL_IDS)} шт\n"
-        f"🎯 Режим: {monitoring_mode}\n"
-        f"⏱️ Сток: {time_in_stock}\n"
-        f"{cache_info}\n"
-        f"🏓 Самопинг: {ping_count} раз (последний: {last_ping_str})\n"
-        f"📝 В памяти: {len(processed_messages_cache)} сообщений\n"
-        f"{duplicate_info}\n"
-        f"🎯 <b>Найдено семян:</b>\n"
-        f"{seeds_stats}\n\n"
-        f"📡 <b>Статус каналов:</b>\n" + "\n".join(channels_info)
-    )
-    
-    if last_error:
-        status_text += f"\n\n⚠️ <b>Последняя ошибка:</b>\n<code>{last_error}</code>"
-    
-    send_telegram_message(chat_id, status_text)
-
-def handle_telegram_command(chat_id, command, message=None):
-    """Обрабатывает команды Telegram"""
-    global channel_enabled
-    
-    logger.info(f"🎯 Обрабатываю команду: {command} от {chat_id}")
-    
-    if message and 'sticker' in message:
-        sticker = message['sticker']
-        file_id = sticker['file_id']
-        emoji = sticker.get('emoji', '')
-        
-        sticker_info = (
-            f"🎯 <b>Информация о стикере:</b>\n"
-            f"🆔 File ID: <code>{file_id}</code>\n"
-            f"😊 Emoji: {emoji}\n\n"
-            f"📋 <b>Для использования в коде:</b>\n"
-            f"<code>sticker_id = \"{file_id}\"</code>"
+    # Сначала проверяем токен
+    try:
+        response = requests.get(
+            "https://discord.com/api/v10/users/@me",
+            headers=headers,
+            timeout=10
         )
-        send_telegram_message(chat_id, sticker_info)
-        return
-    
-    if command == '/start':
-        seeds_list = "\n".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
         
-        welcome_text = (
-            "🎮 <b>Добро пожаловать!</b>\n\n"
-            "Я бот для отслеживания стоков в игре <b>Grow a Garden</b>.\n"
-            f"Автоматически мониторю <b>{len(DISCORD_CHANNEL_IDS)} Discord каналов</b> и присылаю уведомления о стоках.\n\n"
-            "📱 <b>Вам в личные сообщения:</b> Все стоки (читабельный текст)\n"
-            "📢 <b>В канал:</b> Только стикеры при редких семенах\n"
-            f"🤖 <b>Отслеживаю:</b> {BOT_NAME_TO_TRACK}\n"
-            "⏰ <b>Режим:</b> Адаптивный мониторинг\n"
-            "⚡ <b>Интенсивный:</b> 15 сек (00:00-01:15 каждой 5-й минуты)\n"
-            "🐌 <b>Обычный:</b> 60 сек (в остальное время)\n"
-            "🔍 <b>Диагностика:</b> Автоматическая проверка каналов\n"
-            "🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
-            "💾 <b>Умный кэш:</b> Сохраняет состояние между перезапусками\n"
-            "🛡️ <b>Защита от спама:</b> 2 сек между сообщениями\n"
-            "🔄 <b>Защита от дублей:</b> Улучшенная система кэширования\n"
-            "📊 <b>Авто-статус:</b> Каждые 5 часов\n\n"
-            f"🎯 <b>Отслеживаю семена:</b>\n"
-            f"{seeds_list}\n\n"
-            f"📡 <b>Мониторю каналы:</b> {len(DISCORD_CHANNEL_IDS)} шт\n\n"
-            "🎯 <b>Чтобы получить ID стикера:</b> Просто отправьте мне любой стикер!\n\n"
-            "Используйте /help для списка команд."
-        )
-        send_telegram_message(chat_id, welcome_text)
-        
-    elif command == '/help':
-        send_help_message(chat_id)
-        
-    elif command == '/status':
-        send_bot_status(chat_id)
-        
-    elif command == '/enable':
-        channel_enabled = True
-        send_telegram_message(chat_id, "✅ <b>Уведомления в канал ВКЛЮЧЕНЫ</b>\nТеперь стикеры будут приходить в канал при обнаружении семян.")
-        
-    elif command == '/disable':
-        channel_enabled = False
-        send_telegram_message(chat_id, "⏸️ <b>Уведомления в канал ВЫКЛЮЧЕНЫ</b>\nУведомления о семенах (стикеры) временно приостановлены.")
-        
-    else:
-        send_telegram_message(chat_id, "❌ Неизвестная команда. Используйте /help для списка команд.")
+        if response.status_code == 200:
+            user_info = response.json()
+            logger.info(f"✅ Токен Discord валиден! Бот: {user_info.get('username')}")
+            return True
+        else:
+            logger.error(f"❌ Неверный токен Discord: {response.status_code}")
+            send_to_bot(f"❌ <b>ОШИБКА DISCORD:</b> Токен неверный (код: {response.status_code})")
+            return False
+            
+    except Exception as e:
+        logger.error(f"❌ Ошибка подключения к Discord: {e}")
+        send_to_bot(f"❌ <b>ОШИБКА СЕТИ:</b> Не могу подключиться к Discord: {e}")
+        return False
 
-def telegram_poller_safe():
-    """Безопасный опросщик Telegram"""
-    global telegram_offset
-    
-    logger.info("🔍 Запускаю Telegram поллер...")
-    
-    time.sleep(10)
-    
-    while True:
-        try:
-            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
-            params = {
-                'offset': telegram_offset + 1,
-                'timeout': 10,
-                'limit': 1
-            }
-            
-            response = requests.get(url, params=params, timeout=15)
-            
-            if response.status_code == 200:
-                data = response.json()
-                
-                if data.get('ok') and data.get('result'):
-                    updates = data['result']
-                    
-                    for update in updates:
-                        telegram_offset = update['update_id']
-                        
-                        if 'message' in update:
-                            message = update['message']
-                            chat_id = message['chat']['id']
-                            text = message.get('text', '')
-                            
-                            if 'sticker' in message:
-                                logger.info("📎 Получен стикер, обрабатываю...")
-                                handle_telegram_command(chat_id, None, message)
-                                continue
-                                
-                            if text.startswith('/'):
-                                handle_telegram_command(chat_id, text)
-                
-                time.sleep(5)
-                
-            elif response.status_code == 409:
-                logger.warning("⚠️ Конфликт с другим экземпляром. Жду 60 секунд...")
-                time.sleep(60)
-            else:
-                logger.error(f"❌ Ошибка Telegram API: {response.status_code}")
-                time.sleep(10)
-            
-        except requests.exceptions.Timeout:
-            continue
-        except Exception as e:
-            logger.error(f"💥 Ошибка в телеграм поллере: {e}")
-            time.sleep(10)
-
-def safe_discord_request(url, headers, timeout=15):
-    """Безопасный запрос к Discord API с защитой от rate limits"""
-    global last_discord_request_time
-    
-    # Соблюдаем rate limit - ждем между запросами
-    current_time = time.time()
-    time_since_last = current_time - last_discord_request_time
-    
-    if time_since_last < DISCORD_RATE_LIMIT_DELAY:
-        wait_time = DISCORD_RATE_LIMIT_DELAY - time_since_last
-        time.sleep(wait_time)
-    
-    last_discord_request_time = time.time()
+def get_discord_messages_simple(channel_id):
+    """Упрощенный запрос сообщений из Discord"""
+    if not DISCORD_TOKEN:
+        return []
     
     try:
-        response = requests.get(url, headers=headers, timeout=timeout)
-        return response
+        url = f"https://discord.com/api/v10/channels/{channel_id}/messages?limit=3"
+        headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
+        
+        # Очень большие таймауты для тестирования
+        response = requests.get(url, headers=headers, timeout=30)
+        
+        if response.status_code == 200:
+            messages = response.json()
+            for msg in messages:
+                msg['source_channel_id'] = channel_id
+            logger.info(f"✅ Получено {len(messages)} сообщений из канала {channel_id}")
+            return messages
+        elif response.status_code == 429:
+            logger.warning(f"⚠️ Rate limit для канала {channel_id}")
+            time.sleep(5)
+            return []
+        else:
+            logger.error(f"❌ Ошибка {response.status_code} для канала {channel_id}")
+            return []
+            
+    except requests.exceptions.Timeout:
+        logger.error(f"⏱️ Таймаут для канала {channel_id}")
+        return []
     except Exception as e:
-        logger.error(f"❌ Ошибка запроса к Discord: {e}")
-        return None
+        logger.error(f"💥 Ошибка для канала {channel_id}: {e}")
+        return []
 
-def check_discord_channels():
-    """Проверяет доступность всех Discord каналов при старте с защитой от rate limit"""
-    logger.info("🔍 Проверяю доступность Discord каналов...")
-    
-    accessible_channels = []
-    inaccessible_channels = []
-    
-    for channel_id in DISCORD_CHANNEL_IDS:
-        try:
-            url = f"https://discord.com/api/v10/channels/{channel_id}"
-            headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
-            
-            # Используем безопасный запрос
-            response = safe_discord_request(url, headers, timeout=10)
-            
-            if not response:
-                inaccessible_channels.append(channel_id)
-                logger.error(f"❌ Канал {channel_id[-6:]}: ошибка запроса")
-                continue
-            
-            if response.status_code == 200:
-                try:
-                    channel_info = response.json()
-                    channel_name = channel_info.get('name', 'unknown')
-                    accessible_channels.append((channel_id, channel_name))
-                    logger.info(f"✅ Канал {channel_id[-6:]}: доступен ({channel_name})")
-                except json.JSONDecodeError:
-                    logger.error(f"❌ Канал {channel_id[-6:]}: невалидный JSON в ответе")
-                    inaccessible_channels.append(channel_id)
-            
-            # ОБРАБОТКА RATE LIMIT (429)
-            elif response.status_code == 429:
-                try:
-                    data = response.json()
-                    retry_after = data.get('retry_after', 5.0)
-                    logger.warning(f"⏰ Discord rate limit для канала {channel_id[-6:]}. Жду {retry_after} сек")
-                    time.sleep(retry_after)
-                    
-                    # Пробуем еще раз после ожидания
-                    response = safe_discord_request(url, headers, timeout=10)
-                    if response and response.status_code == 200:
-                        try:
-                            channel_info = response.json()
-                            channel_name = channel_info.get('name', 'unknown')
-                            accessible_channels.append((channel_id, channel_name))
-                            logger.info(f"✅ Канал {channel_id[-6:]}: доступен после rate limit ({channel_name})")
-                        except json.JSONDecodeError:
-                            inaccessible_channels.append(channel_id)
-                    else:
-                        inaccessible_channels.append(channel_id)
-                        
-                except json.JSONDecodeError:
-                    logger.error(f"❌ Канал {channel_id[-6:]}: невалидный JSON в rate limit ответе")
-                    inaccessible_channels.append(channel_id)
-                    time.sleep(5)
-                    
-            # ОБРАБОТКА ДРУГИХ ОШИБОК
-            elif response.status_code == 404:
-                logger.error(f"❌ Канал {channel_id[-6:]} не найден (404)")
-                inaccessible_channels.append(channel_id)
-            elif response.status_code == 403:
-                logger.error(f"❌ Нет доступа к каналу {channel_id[-6:]} (403)")
-                inaccessible_channels.append(channel_id)
-            elif response.status_code == 401:
-                logger.error(f"❌ Неавторизован доступ к каналу {channel_id[-6:]} (401) - проверьте токен")
-                inaccessible_channels.append(channel_id)
-            else:
-                logger.error(f"❌ Ошибка Discord API для канала {channel_id[-6:]}: {response.status_code}")
-                inaccessible_channels.append(channel_id)
-                
-            # Делаем паузу между проверками каналов
-            time.sleep(1.5)
-            
-        except Exception as e:
-            inaccessible_channels.append(channel_id)
-            logger.error(f"❌ Канал {channel_id[-6:]}: ошибка подключения - {e}")
-            time.sleep(2)
-    
-    # Отправляем отчет в Telegram
-    if accessible_channels:
-        channels_list = "\n".join([f"✅ ...{ch_id[-6:]}: {name}" for ch_id, name in accessible_channels])
-    else:
-        channels_list = "❌ Нет доступных каналов!"
-    
-    if inaccessible_channels:
-        inaccessible_list = "\n".join([f"❌ ...{ch_id[-6:]}" for ch_id in inaccessible_channels])
-    else:
-        inaccessible_list = "✅ Все каналы доступны"
-    
-    report = (
-        f"📡 <b>Диагностика Discord каналов</b>\n\n"
-        f"<b>Доступные каналы ({len(accessible_channels)}):</b>\n"
-        f"{channels_list}\n\n"
-        f"<b>Недоступные каналы ({len(inaccessible_channels)}):</b>\n"
-        f"{inaccessible_list}\n\n"
-        f"<b>Итого:</b> {len(accessible_channels)}/{len(DISCORD_CHANNEL_IDS)} каналов доступны"
-    )
-    
-    send_to_bot(report)
-    
-    # ВОЗВРАЩАЕМ список доступных каналов
-    return [ch_id for ch_id, _ in accessible_channels]
-
-def get_discord_messages(channel_ids):
-    """Получает сообщения из Discord канала с улучшенной обработкой ошибок"""
-    all_messages = []
-    
-    for channel_id in channel_ids:
-        try:
-            url = f"https://discord.com/api/v10/channels/{channel_id}/messages?limit=5"  # Уменьшили лимит с 10 до 5
-            headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
-            
-            logger.debug(f"📡 Запрос к каналу {channel_id[-6:]}...")
-            
-            # Используем безопасный запрос
-            response = safe_discord_request(url, headers, timeout=15)
-            
-            if not response:
-                logger.error(f"❌ Ошибка запроса к каналу {channel_id[-6:]}")
-                continue
-            
-            # Проверяем статус код
-            if response.status_code == 200:
-                try:
-                    messages = response.json()
-                    if not isinstance(messages, list):
-                        logger.error(f"❌ Неверный ответ от канала {channel_id[-6:]}: не список")
-                        continue
-                        
-                    for msg in messages:
-                        msg['source_channel_id'] = channel_id
-                    all_messages.extend(messages)
-                    logger.debug(f"✅ Получено {len(messages)} сообщений из канала {channel_id[-6:]}")
-                    
-                except json.JSONDecodeError as e:
-                    logger.error(f"❌ Невалидный JSON от канала {channel_id[-6:]}: {e}")
-                    continue
-                    
-            # ОБРАБОТКА RATE LIMIT (429)
-            elif response.status_code == 429:
-                try:
-                    data = response.json()
-                    retry_after = data.get('retry_after', 5.0)
-                    logger.warning(f"⏰ Discord rate limit для канала {channel_id[-6:]}. Жду {retry_after} сек")
-                    time.sleep(retry_after)
-                    
-                    # Пробуем еще раз после ожидания
-                    response = safe_discord_request(url, headers, timeout=15)
-                    if response and response.status_code == 200:
-                        try:
-                            messages = response.json()
-                            for msg in messages:
-                                msg['source_channel_id'] = channel_id
-                            all_messages.extend(messages)
-                            logger.info(f"✅ Получено {len(messages)} сообщений после rate limit")
-                        except json.JSONDecodeError:
-                            logger.error(f"❌ Невалидный JSON после rate limit от канала {channel_id[-6:]}")
-                            continue
-                    else:
-                        logger.error(f"❌ Ошибка после rate limit для канала {channel_id[-6:]}")
-                        
-                except json.JSONDecodeError:
-                    logger.error(f"❌ Невалидный JSON в rate limit ответе от канала {channel_id[-6:]}")
-                    time.sleep(5)
-                    
-            # ОБРАБОТКА ДРУГИХ ОШИБОК
-            elif response.status_code == 404:
-                logger.error(f"❌ Канал {channel_id[-6:]} не найден (404)")
-            elif response.status_code == 403:
-                logger.error(f"❌ Нет доступа к каналу {channel_id[-6:]} (403)")
-            elif response.status_code == 401:
-                logger.error(f"❌ Неавторизован доступ к каналу {channel_id[-6:]} (401)")
-            else:
-                logger.error(f"❌ Ошибка Discord API для канала {channel_id[-6:]}: {response.status_code}")
-                
-            # Увеличиваем паузу между запросами к разным каналам
-            time.sleep(2)
-                
-        except Exception as e:
-            logger.error(f"💥 Неожиданная ошибка подключения к каналу {channel_id[-6:]}: {e}")
-            time.sleep(3)
-    
-    return all_messages
-
-def clean_discord_text_for_display(text):
-    """Очищает текст из Discord для красивого отображения в Telegram"""
+def clean_discord_text(text):
+    """Очищает текст Discord"""
     text = re.sub(r'<:[a-zA-Z0-9_]+:(\d+)>', '', text)
     text = re.sub(r'\*\*', '', text)
     text = re.sub(r'<t:\d+:[tR]>', '', text)
-    
-    lines = text.split('\n')
-    cleaned_lines = []
-    
-    for line in lines:
-        line = line.strip()
-        if line and ('x' in line or ':' in line or any(word in line.lower() for word in ['seeds', 'gear', 'alert', 'stock'])):
-            cleaned_lines.append(line)
-    
-    return '\n'.join(cleaned_lines)
+    return text.strip()
 
-def extract_all_text_from_message(message):
-    """Извлекает ВЕСЬ текст из сообщения"""
-    content = message.get('content', '')
-    embeds = message.get('embeds', [])
-    
-    all_text = content
-    
-    for embed in embeds:
-        if embed.get('title'):
-            all_text += f"\n{embed.get('title')}"
-        
-        if embed.get('description'):
-            all_text += f"\n{embed.get('description')}"
-        
-        for field in embed.get('fields', []):
-            field_name = field.get('name', '')
-            field_value = field.get('value', '')
-            all_text += f"\n{field_name} {field_value}"
-    
-    return all_text
-
-def format_discord_message_for_bot(message):
-    """Форматирует сообщение из Discord для Telegram бота"""
+def format_message(message):
+    """Форматирует сообщение"""
     content = message.get('content', '')
     embeds = message.get('embeds', [])
     
@@ -713,460 +228,220 @@ def format_discord_message_for_bot(message):
             title = re.sub(r'<t:\d+:[tR]>', '', embed.get('title', ''))
             if title.strip():
                 full_text += f"\n\n{title}"
-        
         if embed.get('description'):
             full_text += f"\n{embed.get('description')}"
-        
         for field in embed.get('fields', []):
             field_name = field.get('name', '')
             field_value = field.get('value', '')
             if field_name and field_value:
                 full_text += f"\n\n{field_name}:\n{field_value}"
     
-    cleaned_text = clean_discord_text_for_display(full_text)
-    
-    return cleaned_text.strip()
+    return clean_discord_text(full_text)
 
-def check_discord_messages(messages, channel_ids):
-    """Проверяет сообщения из Discord (отслеживает бота BOT_NAME_TO_TRACK и любых других ботов)"""
-    global last_processed_ids, bot_status, last_error, processed_messages_cache, found_seeds_count, duplicate_stats
+def process_messages(messages):
+    """Обрабатывает сообщения"""
+    global last_processed_ids, found_seeds_count
     
-    if not messages:
-        return False
+    found_any_seed = False
     
-    try:
-        messages.sort(key=lambda x: int(x['id']), reverse=True)
+    for message in messages:
+        channel_id = message.get('source_channel_id')
+        message_id = message.get('id')
         
-        found_any_seed = False
+        if not channel_id or not message_id:
+            continue
         
-        if not last_processed_ids:
-            last_processed_ids = load_last_processed_ids()
-            logger.info(f"📂 Загружены last_processed_ids для {len(last_processed_ids)} каналов")
+        # Проверяем, не обрабатывали ли уже
+        last_id = last_processed_ids.get(channel_id)
+        if last_id and int(message_id) <= int(last_id):
+            continue
         
-        messages_by_channel = {}
-        for message in messages:
-            channel_id = message.get('source_channel_id', 'unknown')
-            if channel_id not in messages_by_channel:
-                messages_by_channel[channel_id] = []
-            messages_by_channel[channel_id].append(message)
+        # Проверяем автора
+        author = message.get('author', {}).get('username', '')
+        is_bot = message.get('author', {}).get('bot', False)
         
-        for channel_id, channel_messages in messages_by_channel.items():
-            if not channel_messages:
-                continue
-                
-            newest_id_in_channel = channel_messages[0]['id']
-            last_processed_id_for_channel = last_processed_ids.get(channel_id)
-            
-            if last_processed_id_for_channel is None:
-                last_processed_ids[channel_id] = newest_id_in_channel
-                save_last_processed_ids()
-                logger.info(f"🚀 Первый запуск для канала {channel_id[-6:]}. Запомнил сообщение: {newest_id_in_channel}")
-                continue
-            
-            for message in channel_messages:
-                message_id = message['id']
-                
-                if int(message_id) <= int(last_processed_id_for_channel):
-                    logger.debug(f"⏩ Пропускаем старое сообщение: {message_id} (последний: {last_processed_id_for_channel}) в канале {channel_id[-6:]}")
-                    continue
-                
-                cache_key = f"{channel_id}:{message_id}"
-                if cache_key in processed_messages_cache:
-                    if channel_id not in duplicate_stats:
-                        duplicate_stats[channel_id] = 0
-                    duplicate_stats[channel_id] += 1
+        if not (is_bot or BOT_NAME_TO_TRACK.lower() in author.lower()):
+            continue
+        
+        # Обрабатываем сообщение
+        formatted = format_message(message)
+        if not formatted:
+            continue
+        
+        # Ищем семена
+        full_text = formatted.lower()
+        found_seeds = []
+        
+        for seed_name, seed_config in TARGET_SEEDS.items():
+            for keyword in seed_config['keywords']:
+                if keyword in full_text:
+                    found_seeds_count[seed_name] += 1
+                    found_seeds.append(seed_config['display_name'])
                     
-                    logger.info(f"🔄 ДУБЛЬ! Пропускаем уже обработанное сообщение: {message_id} в канале {channel_id[-6:]} (всего дублей: {duplicate_stats[channel_id]})")
-                    continue
-                
-                author = message.get('author', {}).get('username', '')
-                author_lower = author.lower()
-                
-                is_bot = message.get('author', {}).get('bot', False)
-                bot_name_to_track_lower = BOT_NAME_TO_TRACK.lower()
-                
-                # Отслеживаем ВСЕХ ботов, а не только одного конкретного
-                if is_bot:
-                    logger.info(f"🤖 Сообщение от бота ({author}): {message_id} в канале {channel_id[-6:]}")
-                else:
-                    # Также отслеживаем сообщения от указанного бота по имени, даже если не отмечен как бот
-                    if bot_name_to_track_lower in author_lower:
-                        logger.info(f"🎯 Сообщение от {BOT_NAME_TO_TRACK} ({author}): {message_id} в канале {channel_id[-6:]}")
-                    else:
-                        logger.debug(f"⏩ Пропускаем сообщение от {author}: {message_id} в канале {channel_id[-6:]}")
-                        continue
-                
-                processed_messages_cache.add(cache_key)
-                
-                formatted_message = format_discord_message_for_bot(message)
-                
-                if formatted_message:
-                    full_search_text = extract_all_text_from_message(message)
-                    search_text_lower = full_search_text.lower()
-                    
-                    found_tracked_seeds = []
-                    
-                    for seed_name, seed_config in TARGET_SEEDS.items():
-                        for keyword in seed_config['keywords']:
-                            if keyword in search_text_lower:
-                                found_seeds_count[seed_name] += 1
-                                found_tracked_seeds.append(seed_config['display_name'])
-                                logger.info(f"🎯 ОБНАРУЖЕН {seed_name.upper()} в канале {channel_id[-6:]}! Ключевое слово: '{keyword}'")
-                                
-                                sticker_sent = send_to_channel(sticker_id=seed_config['sticker_id'])
-                                
-                                if sticker_sent:
-                                    send_to_bot(f"✅ Стикер {seed_config['emoji']} отправлен в канал")
-                                    logger.info(f"✅ Стикер о {seed_name} отправлен в канал!")
-                                else:
-                                    send_to_bot(f"❌ Стикер {seed_config['emoji']} не отправлен в канал")
-                                    logger.error(f"❌ Ошибка отправки стикера о {seed_name}")
-                                
-                                found_any_seed = True
-                                break
-                    
-                    current_time = datetime.now().strftime('%H:%M:%S')
-                    channel_short = channel_id[-6:] if len(channel_id) > 6 else channel_id
-                    
-                    if found_tracked_seeds:
-                        seeds_str = ", ".join(found_tracked_seeds)
-                        bot_message = (
-                            f"⏰Найдены отслеживаемые семена\n"
-                            f"🤖 Автор: {author}\n"
-                            f"📡 Канал: {channel_short}\n"
-                            f"🎯 Семена: {seeds_str}\n"
-                            f"Сток {current_time}\n\n"
-                            f"<code>{formatted_message}</code>"
-                        )
-                    else:
-                        bot_message = (
-                            f"🤖 Автор: {author}\n"
-                            f"📡 Канал: {channel_short}\n"
-                            f"Сток {current_time}\n\n"
-                            f"<code>{formatted_message}</code>"
-                        )
-                    
-                    send_to_bot(bot_message)
-            
-            processed_message_ids = [int(m['id']) for m in channel_messages if int(m['id']) > int(last_processed_id_for_channel)]
-            if processed_message_ids:
-                max_processed_id = max(processed_message_ids)
-                if int(max_processed_id) > int(last_processed_id_for_channel):
-                    last_processed_ids[channel_id] = str(max_processed_id)
-                    save_last_processed_ids()
-                    logger.info(f"💾 Обновлен last_processed_id для канала {channel_id[-6:]}: {max_processed_id}")
-        
-        bot_status = "🟢 Работает нормально"
-        last_error = None
-        return found_any_seed
-        
-    except Exception as e:
-        error_msg = f"Ошибка обработки сообщений: {e}"
-        logger.error(f"💥 {error_msg}")
-        bot_status = "🔴 Ошибка обработки"
-        last_error = error_msg
-        send_to_bot(f"🚨 <b>Ошибка в мониторинге:</b>\n<code>{last_error}</code>")
-        return False
-
-def monitor_discord():
-    """Основная функция мониторинга - АДАПТИВНЫЙ РЕЖИМ (ТОЛЬКО ВО ВРЕМЯ СТОКА)"""
-    # Получаем доступные каналы при старте
-    available_channels = check_discord_channels()
-    
-    if not available_channels:
-        logger.error("❌ Нет доступных каналов для мониторинга!")
-        send_to_bot("❌ <b>ОШИБКА:</b> Нет доступных Discord каналов для мониторинга!\nПроверьте настройки и подождите 10 минут (rate limit).")
-        
-        # Ждем 10 минут для сброса rate limit, потом пробуем еще раз
-        logger.info("⏰ Жду 10 минут для сброса rate limit Discord...")
-        time.sleep(600)
-        
-        available_channels = check_discord_channels()
-        
-        if not available_channels:
-            logger.error("❌ Все еще нет доступных каналов после ожидания!")
-            send_to_bot("🚨 <b>КРИТИЧЕСКАЯ ОШИБКА:</b> Discord каналы недоступны даже после ожидания.\nПроверьте токен и права бота.")
-            
-            # Переходим в режим периодической проверки
-            while True:
-                logger.info("🔄 Проверяю доступность каналов через 15 минут...")
-                time.sleep(900)  # 15 минут
-                
-                available_channels = check_discord_channels()
-                if available_channels:
-                    logger.info(f"✅ Каналы доступны ({len(available_channels)} шт), возобновляю мониторинг...")
+                    # Отправляем стикер
+                    send_to_channel(sticker_id=seed_config['sticker_id'])
+                    found_any_seed = True
                     break
+        
+        # Отправляем в бота
+        current_time = datetime.now().strftime('%H:%M:%S')
+        if found_seeds:
+            seeds_str = ", ".join(found_seeds)
+            bot_msg = f"⏰Найдены семена: {seeds_str}\nСток {current_time}\n\n<code>{formatted}</code>"
+        else:
+            bot_msg = f"Сток {current_time}\n\n<code>{formatted}</code>"
+        
+        send_to_bot(bot_msg)
+        
+        # Обновляем последний ID
+        last_processed_ids[channel_id] = message_id
     
-    logger.info(f"🔄 Запуск мониторинга {len(available_channels)} каналов Discord...")
-    logger.info(f"🤖 Отслеживаю: {BOT_NAME_TO_TRACK} и ВСЕХ ботов")
-    logger.info("⏰ АДАПТИВНЫЙ РЕЖИМ: Интенсивный мониторинг ТОЛЬКО во время стоков")
+    if last_processed_ids:
+        save_last_processed_ids()
     
-    error_count = 0
-    max_errors = 10
+    return found_any_seed
+
+def monitor_discord_simple():
+    """Упрощенный мониторинг Discord"""
+    logger.info("🔄 Запускаю упрощенный мониторинг Discord...")
     
-    # 🆕 НАСТРОЙКИ АДАПТИВНОГО МОНИТОРИНГА
-    INTENSIVE_MONITORING_INTERVAL = 20  # Увеличили с 15 до 20 секунд в интенсивном режиме
-    NORMAL_MONITORING_INTERVAL = 90     # Увеличили с 60 до 90 секунд в обычном режиме
+    # Сначала тестируем подключение
+    if not test_discord_connection():
+        logger.error("❌ Не могу подключиться к Discord. Жду 5 минут...")
+        time.sleep(300)
+        return
     
+    # Загружаем кэш
+    global last_processed_ids
+    last_processed_ids = load_last_processed_ids()
+    
+    # Основной цикл
     while True:
         try:
             current_time = datetime.now()
             current_minute = current_time.minute
-            current_second = current_time.second
             
-            # 🆕 УПРОЩЕННАЯ ЛОГИКА: интенсивный режим ТОЛЬКО во время стока (с 00 по 01:15)
-            # Определяем, является ли текущая минута "стоковой" (00, 05, 10, 15 и т.д.)
-            is_stock_minute = current_minute % 5 == 0
-            
-            # Если это стоковая минута И прошло меньше 75 секунд (1:15) с начала минуты
-            if is_stock_minute and current_second < 75:
-                monitoring_interval = INTENSIVE_MONITORING_INTERVAL
-                mode = "⚡ ИНТЕНСИВНЫЙ (стоковая минута)"
-                logger.debug(f"{mode}: проверка каждые {monitoring_interval} сек (минута: {current_minute}, секунда: {current_second})")
-            
+            # Определяем интервал
+            if current_minute % 5 == 0:  # Стоковая минута
+                interval = 20
+                mode = "⚡ ИНТЕНСИВНЫЙ"
             else:
-                monitoring_interval = NORMAL_MONITORING_INTERVAL
+                interval = 60
                 mode = "🐌 ОБЫЧНЫЙ"
-                
-                # Вычисляем сколько секунд до следующего стока
-                next_stock_minute = ((current_minute // 5) * 5) + 5
-                if next_stock_minute >= 60:
-                    next_stock_minute = 0
-                
-                seconds_to_next_stock = ((next_stock_minute - current_minute) % 60) * 60 - current_second
-                if seconds_to_next_stock < 0:
-                    seconds_to_next_stock += 3600
-                
-                logger.debug(f"{mode}: проверка каждые {monitoring_interval} сек (до стока {seconds_to_next_stock//60}:{seconds_to_next_stock%60:02d})")
             
-            # Получаем сообщения только из доступных каналов
-            messages = get_discord_messages(available_channels)
+            logger.debug(f"{mode}: проверка каналов...")
             
-            if messages:
-                found_any_seed = check_discord_messages(messages, available_channels)
-                cleanup_memory_cache()
-                
-                if found_any_seed:
-                    logger.info("✅ Стикер о семенах отправлен в канал!")
-                
-                error_count = 0
-            else:
-                cleanup_memory_cache()
+            # Проверяем каждый канал по очереди
+            for channel_id in DISCORD_CHANNEL_IDS:
+                messages = get_discord_messages_simple(channel_id)
+                if messages:
+                    found = process_messages(messages)
+                    if found:
+                        logger.info("✅ Найдены семена!")
             
-            # Ждем перед следующей проверкой
-            logger.debug(f"💤 {mode}: ожидаю {monitoring_interval} секунд до следующей проверки...")
-            time.sleep(monitoring_interval)
+            logger.debug(f"💤 Ожидаю {interval} секунд...")
+            time.sleep(interval)
             
         except Exception as e:
-            logger.error(f"💥 Критическая ошибка в мониторинге: {e}")
-            error_count += 1
-            
-            if error_count >= max_errors:
-                send_to_bot(f"🚨 <b>Критическая ошибка!</b>\nВ мониторинге:\n<code>{e}</code>\n\nПерезапускаюсь через 10 минут...")
-                logger.error(f"🚨 Слишком много ошибок ({error_count}/{max_errors}), перезапуск через 10 минут...")
-                time.sleep(600)
-                error_count = 0
-            else:
-                time.sleep(60)
+            logger.error(f"💥 Ошибка в мониторинге: {e}")
+            time.sleep(60)
 
-def health_monitor():
-    """Мониторинг здоровья бота"""
-    logger.info("❤️ Запускаю монитор здоровья (каждые 5 часов)...")
+def telegram_poller():
+    """Обработчик Telegram команд"""
+    global telegram_offset
     
-    report_count = 0
+    time.sleep(10)
     
     while True:
         try:
-            time.sleep(18000)
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
+            params = {'offset': telegram_offset + 1, 'timeout': 10, 'limit': 1}
             
-            report_count += 1
-            uptime = datetime.now() - startup_time
-            hours = uptime.total_seconds() / 3600
+            response = requests.get(url, params=params, timeout=15)
             
-            seeds_stats = "\n".join([f"{TARGET_SEEDS[name]['emoji']} {TARGET_SEEDS[name]['display_name']}: {count} раз" 
-                                   for name, count in found_seeds_count.items()])
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('ok') and data.get('result'):
+                    for update in data['result']:
+                        telegram_offset = update['update_id']
+                        
+                        if 'message' in update:
+                            msg = update['message']
+                            chat_id = msg['chat']['id']
+                            text = msg.get('text', '')
+                            
+                            if text == '/status':
+                                uptime = datetime.now() - startup_time
+                                hours = uptime.total_seconds() / 3600
+                                
+                                seeds_stats = "\n".join([
+                                    f"{config['emoji']} {config['display_name']}: {count}"
+                                    for name, config in TARGET_SEEDS.items()
+                                    for count in [found_seeds_count.get(name, 0)]
+                                ])
+                                
+                                status_msg = (
+                                    f"📊 <b>Статус бота</b>\n\n"
+                                    f"{bot_status}\n"
+                                    f"⏰ Работает: {hours:.1f} часов\n"
+                                    f"📡 Каналов: {len(DISCORD_CHANNEL_IDS)} шт\n"
+                                    f"🎯 Отслеживаю: {BOT_NAME_TO_TRACK}\n"
+                                    f"🏓 Самопинг: {ping_count} раз\n\n"
+                                    f"🎯 <b>Найдено семян:</b>\n"
+                                    f"{seeds_stats}"
+                                )
+                                
+                                send_telegram_message(chat_id, status_msg)
             
-            status_report = (
-                f"📊 <b>Авто-статус #{report_count}</b>\n"
-                f"⏰ Работает: {hours:.1f} часов\n"
-                f"📢 Канал: {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}\n"
-                f"🤖 Отслеживаю: {BOT_NAME_TO_TRACK}\n"
-                f"📡 Каналов: {len(DISCORD_CHANNEL_IDS)} шт\n"
-                f"🔄 {bot_status}\n"
-                f"🏓 Самопинг: {ping_count} раз\n"
-                f"📝 В памяти: {len(processed_messages_cache)} сообщений\n\n"
-                f"🎯 <b>Найдено семян:</b>\n"
-                f"{seeds_stats}\n\n"
-                f"✅ Бот стабильно работает в адаптивном режиме"
-            )
-            
-            send_to_bot(status_report)
-            logger.info(f"📊 Авто-статус #{report_count} отправлен в бота")
+            time.sleep(5)
             
         except Exception as e:
-            logger.error(f"❌ Ошибка отправки авто-статуса: {e}")
+            logger.error(f"❌ Ошибка Telegram: {e}")
+            time.sleep(10)
 
 @app.route('/')
 def home():
     uptime = datetime.now() - startup_time
     hours = uptime.total_seconds() / 3600
     
-    seeds_list = ", ".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
-    
-    channels_info = ""
-    for i, channel_id in enumerate(DISCORD_CHANNEL_IDS[:5], 1):
-        channel_short = channel_id[-6:] if len(channel_id) > 6 else channel_id
-        last_id = last_processed_ids.get(channel_id, 'Нет данных')
-        channels_info += f"<div class='info'><strong>Канал {i}:</strong> ...{channel_short} (последний: {last_id})</div>"
-    
-    if len(DISCORD_CHANNEL_IDS) > 5:
-        channels_info += f"<div class='info'><strong>И еще:</strong> {len(DISCORD_CHANNEL_IDS) - 5} каналов</div>"
-    
-    cache_info = f"<div class='info'><strong>Файл кэша:</strong> {'✅ Существует' if os.path.exists(CACHE_FILE) else '❌ Не найден'}</div>"
-    
     return f"""
     <html>
-        <head>
-            <title>🌱 Seed Monitor</title>
-            <style>
-                body {{ font-family: Arial, sans-serif; margin: 40px; }}
-                .status {{ background: #f0f8f0; padding: 20px; border-radius: 10px; }}
-                .info {{ margin: 10px 0; }}
-                .commands {{ background: #e3f2fd; padding: 20px; margin: 10px 0; border-radius: 8px; }}
-                .button {{ background: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin: 5px; }}
-                .button-disable {{ background: #f44336; }}
-            </style>
-        </head>
+        <head><title>🌱 Seed Monitor</title></head>
         <body>
-            <h1>🌱 Умный мониторинг семян</h1>
-            
-            <div class="status">
-                <h3>📊 Статус системы</h3>
-                <div class="info"><strong>Состояние:</strong> {bot_status}</div>
-                <div class="info"><strong>Время работы:</strong> {hours:.1f} часов</div>
-                <div class="info"><strong>Канал:</strong> {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}</div>
-                <div class="info"><strong>Отслеживаю бота:</strong> {BOT_NAME_TO_TRACK}</div>
-                <div class="info"><strong>Каналов Discord:</strong> {len(DISCORD_CHANNEL_IDS)} шт</div>
-                <div class="info"><strong>Режим:</strong> Адаптивный мониторинг</div>
-                <div class="info"><strong>Самопинг:</strong> 🏓 {ping_count} раз</div>
-                <div class="info"><strong>В памяти:</strong> {len(processed_messages_cache)} сообщений</div>
-                <div class="info"><strong>Авто-статус:</strong> 📊 Каждые 5 часов</div>
-                <div class="info"><strong>Отслеживаю:</strong> {seeds_list}</div>
-                {cache_info}
-                <h4>📡 Отслеживаемые каналы:</h4>
-                {channels_info}
-            </div>
-            
-            <div class="commands">
-                <h3>🎛️ Управление</h3>
-                <a href="/enable_channel" class="button">✅ Включить канал</a>
-                <a href="/disable_channel" class="button button-disable">⏸️ Выключить канал</a>
-                <a href="/status" class="button">📊 Статус</a>
-            </div>
-            
-            <div class="commands">
-                <h3>🤖 Логика работы</h3>
-                <p>📱 <strong>Вам в бота:</strong> Все стоки от {BOT_NAME_TO_TRACK} (и любых ботов)</p>
-                <p>📢 <strong>В канал:</b> Только стикеры при редких семенах</p>
-                <p>🎯 <strong>Отслеживаю:</strong> {seeds_list}</p>
-                <p>⏰ <strong>Адаптивный режим:</strong> Интенсивный мониторинг ТОЛЬКО во время стоков</p>
-                <p>⚡ <strong>Интенсивный:</strong> Каждые 20 сек (00:00-01:15 каждой 5-й минуты)</p>
-                <p>🐌 <strong>Обычный:</strong> Каждые 90 сек (в остальное время)</p>
-                <p>🔍 <strong>Диагностика:</strong> Автоматическая проверка каналов</p>
-                <p>📡 <strong>Rate limit защита:</strong> Улучшенная обработка ошибок Discord API</p>
-                <p>💾 <strong>Надежный кэш:</strong> Работает по ID сообщений</p>
-                <p>🛡️ <strong>Защита от спама:</strong> 2 сек между сообщениями</p>
-                <p>🏓 <strong>Самопинг:</strong> Каждые 8 минут</p>
-                <p>📊 <strong>Авто-статус:</strong> Каждые 5 часов</p>
-            </div>
+            <h1>🌱 Мониторинг семян</h1>
+            <p><strong>Статус:</strong> {bot_status}</p>
+            <p><strong>Время работы:</strong> {hours:.1f} часов</p>
+            <p><strong>Каналов Discord:</strong> {len(DISCORD_CHANNEL_IDS)}</p>
+            <p><strong>Самопинг:</strong> {ping_count} раз</p>
         </body>
     </html>
     """
 
-@app.route('/enable_channel')
-def enable_channel():
-    global channel_enabled
-    channel_enabled = True
-    return "✅ Уведомления в канал ВКЛЮЧЕНЫ"
-
-@app.route('/disable_channel')
-def disable_channel():
-    global channel_enabled
-    channel_enabled = False
-    return "⏸️ Уведомления в канал ВЫКЛЮЧЕНЫ"
-
-@app.route('/status')
-def status_page():
-    return home()
-
 def start_background_threads():
-    logger.info("🔄 Запускаю фоновые потоки...")
-    
+    """Запускает фоновые потоки"""
     threads = [
-        threading.Thread(target=monitor_discord, daemon=True),
-        threading.Thread(target=telegram_poller_safe, daemon=True),
-        threading.Thread(target=health_monitor, daemon=True),
+        threading.Thread(target=monitor_discord_simple, daemon=True),
+        threading.Thread(target=telegram_poller, daemon=True),
         threading.Thread(target=self_pinger, daemon=True)
     ]
     
     for thread in threads:
         thread.start()
-        logger.info(f"✅ Поток {thread.name} запущен")
     
     return threads
 
 if __name__ == '__main__':
-    seeds_list = ", ".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
+    logger.info("🚀 ЗАПУСК УПРОЩЕННОЙ ВЕРСИИ БОТА")
+    logger.info(f"📡 Каналы: {len(DISCORD_CHANNEL_IDS)} шт")
+    logger.info(f"🤖 Отслеживаю: {BOT_NAME_TO_TRACK}")
     
-    logger.info("🚀 БОТ С УЛУЧШЕННОЙ ЗАЩИТОЙ ОТ RATE LIMITS!")
-    logger.info(f"📡 Всего каналов: {len(DISCORD_CHANNEL_IDS)}")
-    logger.info(f"🤖 Отслеживаю: {BOT_NAME_TO_TRACK} и ВСЕХ ботов")
+    # Тестируем подключение перед запуском
+    connection_ok = test_discord_connection()
     
-    logger.info("📱 Вам в бота: Все стоки от ботов (читабельный текст)")
-    logger.info("📢 В канал: Только стикеры при редких семенах")
-    logger.info(f"🎯 Отслеживаю семена: {seeds_list}")
-    logger.info("⏰ Адаптивный режим: Интенсивный ТОЛЬКО во время стоков (00:00-01:15 каждой 5-й минуты)")
-    logger.info("⚡ Интенсивный режим: Каждые 20 секунд (увеличено для защиты от rate limits)")
-    logger.info("🐌 Обычный режим: Каждые 90 секунд (увеличено для защиты от rate limits)")
-    logger.info("🔍 Диагностика каналов: Включена")
-    logger.info("🛡️ Rate limit защита: Улучшенная система с таймерами")
-    logger.info("🛡️ Защита от дублей: Включена")
-    logger.info("💾 Улучшенный кэш: 500 сообщений в памяти")
-    logger.info("🧹 Умная очистка памяти: Активна")
-    logger.info("🏓 Самопинг: Активен (каждые 8 минут)")
-    logger.info("📊 Авто-статус: Каждые 5 часов")
+    if connection_ok:
+        send_to_bot("✅ <b>Бот запущен!</b>\nУпрощенная версия с проверкой подключения.")
+    else:
+        send_to_bot("⚠️ <b>Внимание:</b> Проблемы с Discord. Бот запускается в тестовом режиме.")
     
     start_background_threads()
-    
-    seeds_list_bot = "\n".join([f"{config['emoji']} {config['display_name']}" for name, config in TARGET_SEEDS.items()])
-    
-    startup_msg_bot = (
-        f"🚀 <b>БОТ ЗАПУЩЕН С УЛУЧШЕННОЙ ЗАЩИТОЙ ОТ RATE LIMITS!</b>\n\n"
-        f"📡 <b>Мониторю:</b> {len(DISCORD_CHANNEL_IDS)} каналов Discord\n"
-        f"🤖 <b>Отслеживаю:</b> {BOT_NAME_TO_TRACK} и ВСЕХ ботов\n"
-        f"📱 <b>Вам в бота:</b> Все стоки от ботов (читабельный текст)\n"
-        f"📢 <b>В канал:</b> Только стикеры при редких семенах\n"
-        f"⏰ <b>Адаптивный режим:</b> Интенсивный мониторинг ТОЛЬКО во время стоков\n"
-        f"⚡ <b>Интенсивный:</b> 20 сек (00:00-01:15 каждой 5-й минуты)\n"
-        f"🐌 <b>Обычный:</b> 90 сек (в остальное время)\n"
-        f"🔍 <b>Диагностика:</b> Автоматическая проверка каналов\n"
-        f"🛡️ <b>Защита от rate limits:</b> Улучшенная система с таймерами\n"
-        f"🛡️ <b>Защита от дублей:</b> Улучшенная система кэширования\n"
-        f"🛡️ <b>Защита от спама:</b> 2 сек между сообщениями\n\n"
-        f"🎯 <b>ОТСЛЕЖИВАЮ СЕМЕНА:</b>\n"
-        f"{seeds_list_bot}\n\n"
-        f"⚙️ <b>Конфигурация:</b>\n"
-        f"• BOT_NAME_TO_TRACK: {BOT_NAME_TO_TRACK}\n"
-        f"• DISCORD_CHANNEL_IDS: {len(DISCORD_CHANNEL_IDS)} каналов\n"
-        f"• RATE_LIMIT_DELAY: {DISCORD_RATE_LIMIT_DELAY} сек между запросами\n\n"
-        f"🎛️ <b>Команды:</b>\n"
-        f"/start - Информация\n"
-        f"/status - Статус (показывает режим мониторига)\n" 
-        f"/enable - Включить канал\n"
-        f"/disable - Выключить канал\n"
-        f"/help - Помощь"
-    )
-    
-    send_to_bot(startup_msg_bot)
-    
     app.run(host='0.0.0.0', port=5000)
