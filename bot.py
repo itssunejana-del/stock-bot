@@ -511,23 +511,14 @@ def check_discord_channels():
     
     send_to_bot(report)
     
-    # Обновляем список каналов - используем только доступные
-    if accessible_channels:
-        global DISCORD_CHANNEL_IDS
-        DISCORD_CHANNEL_IDS = [ch_id for ch_id, _ in accessible_channels]
-        logger.info(f"🔄 Использую только доступные каналы: {len(DISCORD_CHANNEL_IDS)} шт")
-        
-        if inaccessible_channels:
-            logger.warning(f"⚠️ Игнорирую недоступные каналы: {len(inaccessible_channels)} шт")
-            send_to_bot(f"⚠️ <b>Внимание!</b>\n{len(inaccessible_channels)} каналов недоступны и будут игнорироваться.")
-    
-    return len(accessible_channels) > 0
+    # ВОЗВРАЩАЕМ список доступных каналов вместо изменения глобальной переменной
+    return [ch_id for ch_id, _ in accessible_channels]
 
-def get_discord_messages():
+def get_discord_messages(channel_ids):
     """Получает сообщения из Discord канала с улучшенной обработкой ошибок"""
     all_messages = []
     
-    for channel_id in DISCORD_CHANNEL_IDS:
+    for channel_id in channel_ids:
         try:
             url = f"https://discord.com/api/v10/channels/{channel_id}/messages?limit=10"
             headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
@@ -597,7 +588,7 @@ def get_discord_messages():
             logger.error(f"⏱️ Таймаут при подключении к каналу {channel_id[-6:]}")
             time.sleep(2)
         except requests.exceptions.ConnectionError:
-            logger.error(f"🔌 Ошибка соединения с каналом {channel_id[-6:]}")
+            logger.error(f"🔌 Ошибка соединения с каналу {channel_id[-6:]}")
             time.sleep(3)
         except Exception as e:
             logger.error(f"💥 Неожиданная ошибка подключения к каналу {channel_id[-6:]}: {e}")
@@ -667,7 +658,7 @@ def format_ember_message_for_bot(message):
     
     return cleaned_text.strip()
 
-def check_ember_messages(messages):
+def check_ember_messages(messages, channel_ids):
     """ВОЗВРАЩАЕМ НАДЕЖНУЮ ЛОГИКУ (с УЛУЧШЕННОЙ защитой от дублей)"""
     global last_processed_ids, bot_status, last_error, processed_messages_cache, found_seeds_count, duplicate_stats
     
@@ -807,9 +798,10 @@ def check_ember_messages(messages):
 
 def monitor_discord():
     """Основная функция мониторинга - АДАПТИВНЫЙ РЕЖИМ (ТОЛЬКО ВО ВРЕМЯ СТОКА)"""
-    logger.info(f"🔄 Запуск мониторинга {len(DISCORD_CHANNEL_IDS)} каналов Discord...")
+    # Получаем доступные каналы при старте
+    available_channels = check_discord_channels()
     
-    if not DISCORD_CHANNEL_IDS:
+    if not available_channels:
         logger.error("❌ Нет доступных каналов для мониторинга!")
         send_to_bot("❌ <b>ОШИБКА:</b> Нет доступных Discord каналов для мониторинга!\nПроверьте настройки.")
         
@@ -818,11 +810,12 @@ def monitor_discord():
             logger.info("🔄 Проверяю доступность каналов через 5 минут...")
             time.sleep(300)  # 5 минут
             
-            channels_ok = check_discord_channels()
-            if channels_ok and DISCORD_CHANNEL_IDS:
-                logger.info("✅ Каналы доступны, возобновляю мониторинг...")
+            available_channels = check_discord_channels()
+            if available_channels:
+                logger.info(f"✅ Каналы доступны ({len(available_channels)} шт), возобновляю мониторинг...")
                 break
-        
+    
+    logger.info(f"🔄 Запуск мониторинга {len(available_channels)} каналов Discord...")
     logger.info(f"🤖 Отслеживаю бота: {BOT_NAME_TO_TRACK}")
     logger.info("⏰ АДАПТИВНЫЙ РЕЖИМ: Интенсивный мониторинг ТОЛЬКО во время стоков")
     
@@ -864,11 +857,11 @@ def monitor_discord():
                 
                 logger.debug(f"{mode}: проверка каждые {monitoring_interval} сек (до стока {seconds_to_next_stock//60}:{seconds_to_next_stock%60:02d})")
             
-            # Получаем сообщения
-            messages = get_discord_messages()
+            # Получаем сообщения только из доступных каналов
+            messages = get_discord_messages(available_channels)
             
             if messages:
-                found_any_seed = check_ember_messages(messages)
+                found_any_seed = check_ember_messages(messages, available_channels)
                 cleanup_memory_cache()
                 
                 if found_any_seed:
@@ -1047,13 +1040,6 @@ if __name__ == '__main__':
     logger.info(f"📡 Всего каналов: {len(DISCORD_CHANNEL_IDS)}")
     logger.info(f"🤖 Отслеживаю бота: {BOT_NAME_TO_TRACK}")
     
-    # Запускаем диагностику каналов
-    channels_ok = check_discord_channels()
-    
-    if not channels_ok:
-        logger.error("❌ Нет доступных Discord каналов! Бот может не работать корректно.")
-        send_to_bot("🚨 <b>КРИТИЧЕСКАЯ ОШИБКА!</b>\nНет доступных Discord каналов!\nПроверьте настройки и перезапустите бота.")
-    
     logger.info("📱 Вам в бота: Все стоки от ботов (читабельный текст)")
     logger.info("📢 В канал: Только стикеры при редких семенах")
     logger.info(f"🎯 Отслеживаю: {seeds_list}")
@@ -1074,7 +1060,7 @@ if __name__ == '__main__':
     
     startup_msg_bot = (
         f"🚀 <b>БОТ ЗАПУЩЕН С ДИАГНОСТИКОЙ КАНАЛОВ!</b>\n\n"
-        f"📡 <b>Мониторю:</b> {len(DISCORD_CHANNEL_IDS)} доступных каналов Discord\n"
+        f"📡 <b>Мониторю:</b> {len(DISCORD_CHANNEL_IDS)} каналов Discord (проверяю доступность...)\n"
         f"🤖 <b>Отслеживаю:</b> {BOT_NAME_TO_TRACK} (и любых ботов)\n"
         f"📱 <b>Вам в бота:</b> Все стоки от ботов (читабельный текст)\n"
         f"📢 <b>В канал:</b> Только стикеры при редких семенах\n"
