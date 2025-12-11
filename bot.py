@@ -1,4 +1,4 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request
 import requests
 import os
 import time
@@ -7,25 +7,32 @@ import threading
 from datetime import datetime
 import re
 import json
-import queue
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    datefmt='%Y-%m-%d %H:%M:%S'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# ==================== КОНФИГУРАЦИЯ ====================
+# ==================== НАСТРОЙКИ ====================
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')
 TELEGRAM_BOT_CHAT_ID = os.getenv('TELEGRAM_BOT_CHAT_ID')
-WEBHOOK_SEEDS_URL = os.getenv('WEBHOOK_SEEDS')
-WEBHOOK_EGGS_URL = os.getenv('WEBHOOK_EGGS')
-WEBHOOK_PASS_SHOP_URL = os.getenv('WEBHOOK_PASS_SHOP')
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
+
+# Получаем ID каналов из переменных окружения
+DISCORD_CHANNEL_IDS = []
+for var_name in ['SEEDS_CHANNEL_ID', 'EGGS_CHANNEL_ID', 'PASS_SHOP_CHANNEL_ID']:
+    channel_id = os.getenv(var_name)
+    if channel_id:
+        DISCORD_CHANNEL_IDS.append(channel_id.strip())
+
+if not DISCORD_CHANNEL_IDS:
+    # Для обратной совместимости
+    old_channel_id = os.getenv('DISCORD_CHANNEL_ID')
+    if old_channel_id:
+        DISCORD_CHANNEL_IDS = [old_channel_id]
+
+logger.info(f"📡 Буду мониторить {len(DISCORD_CHANNEL_IDS)} каналов")
 
 # ==================== ОТСЛЕЖИВАЕМЫЕ ПРЕДМЕТЫ ====================
 TARGET_SEEDS = {
@@ -67,101 +74,57 @@ TARGET_SEEDS = {
     }
 }
 
-# ==================== КОНФИГУРАЦИЯ КАНАЛОВ ====================
-# Используем webhook_url как ключ, а channel_id будем получать из вебхука
-CHANNEL_CONFIGS = {}
+# ==================== РАСПИСАНИЕ ОПРОСА ====================
+# Разное расписание для разных типов каналов
+CHANNEL_SCHEDULES = {}
 
-# Канал семян
-if WEBHOOK_SEEDS_URL:
-    CHANNEL_CONFIGS[WEBHOOK_SEEDS_URL] = {
-        'type': 'seeds',
+# Канал семян (первый канал) - частые запросы после обновления
+if len(DISCORD_CHANNEL_IDS) >= 1:
+    CHANNEL_SCHEDULES[DISCORD_CHANNEL_IDS[0]] = {
         'name': '🌱 Семена',
-        'webhook_url': WEBHOOK_SEEDS_URL,
-        'channel_id': None,  # Будем получать из вебхука
-        'update_interval': 300,
-        'burst_schedule': [20, 40, 60, 120, 180],
-        'idle_interval': 60,
-        'last_update_time': None,
-        'next_check_time': None,
-        'in_burst_mode': False,
+        'base_interval': 60,  # 1 минута между запросами обычно
+        'burst_schedule': [20, 40, 60, 120, 180, 240, 300],  # запросы через N секунд после находки
+        'in_burst': False,
+        'burst_start': None,
         'burst_index': 0
     }
-    logger.info(f"✅ Настроен канал Семена")
 
-# Канал яиц
-if WEBHOOK_EGGS_URL:
-    CHANNEL_CONFIGS[WEBHOOK_EGGS_URL] = {
-        'type': 'eggs',
+# Канал яиц (второй канал) - редкие запросы
+if len(DISCORD_CHANNEL_IDS) >= 2:
+    CHANNEL_SCHEDULES[DISCORD_CHANNEL_IDS[1]] = {
         'name': '🥚 Яйца',
-        'webhook_url': WEBHOOK_EGGS_URL,
-        'channel_id': None,  # Будем получать из вебхука
-        'update_interval': 1800,
-        'burst_schedule': [30, 60, 120, 300, 600, 1200],
-        'idle_interval': 300,
-        'last_update_time': None,
-        'next_check_time': None,
-        'in_burst_mode': False,
+        'base_interval': 300,  # 5 минут между запросами
+        'burst_schedule': [30, 60, 120, 300, 600],  # редкие запросы
+        'in_burst': False,
+        'burst_start': None,
         'burst_index': 0
     }
-    logger.info(f"✅ Настроен канал Яйца")
 
-# Канал пасс-шопа
-if WEBHOOK_PASS_SHOP_URL:
-    CHANNEL_CONFIGS[WEBHOOK_PASS_SHOP_URL] = {
-        'type': 'pass_shop',
+# Канал пасс-шопа (третий канал) - средние запросы
+if len(DISCORD_CHANNEL_IDS) >= 3:
+    CHANNEL_SCHEDULES[DISCORD_CHANNEL_IDS[2]] = {
         'name': '🎫 Пасс-шоп',
-        'webhook_url': WEBHOOK_PASS_SHOP_URL,
-        'channel_id': None,  # Будем получать из вебхука
-        'update_interval': 300,
-        'burst_schedule': [40, 70, 100],
-        'idle_interval': 300,
-        'last_update_time': None,
-        'next_check_time': None,
-        'in_burst_mode': False,
+        'base_interval': 120,  # 2 минуты между запросами
+        'burst_schedule': [40, 80, 120, 180],  # средние запросы
+        'in_burst': False,
+        'burst_start': None,
         'burst_index': 0
     }
-    logger.info(f"✅ Настроен канал Пасс-шоп")
-
-if not CHANNEL_CONFIGS:
-    logger.error("❌ Нет настроенных вебхуков!")
-else:
-    logger.info(f"📡 Настроено {len(CHANNEL_CONFIGS)} канала(ов)")
 
 # ==================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ====================
 last_processed_ids = {}
-processed_messages_cache = set()
+CACHE_FILE = 'last_processed_ids.json'
 startup_time = datetime.now()
 channel_enabled = True
-bot_status = "🟢 Ожидание вебхуков"
+bot_status = "🟢 Ожидание старта"
 last_error = None
-found_seeds_count = {name: 0 for name in TARGET_SEEDS.keys()}
+processed_messages_cache = set()
+telegram_offset = 0
 ping_count = 0
 last_ping_time = None
-telegram_offset = 0
-request_queue = queue.Queue()
+found_seeds_count = {name: 0 for name in TARGET_SEEDS.keys()}
 
-# ==================== ПОМОЩНИКИ ДЛЯ КАНАЛОВ ====================
-def get_channel_config_by_url(webhook_url):
-    """Получает конфигурацию канала по URL вебхука"""
-    return CHANNEL_CONFIGS.get(webhook_url)
-
-def get_channel_config_by_id(channel_id):
-    """Получает конфигурацию канала по ID канала"""
-    for config in CHANNEL_CONFIGS.values():
-        if config.get('channel_id') == channel_id:
-            return config
-    return None
-
-def update_channel_id(webhook_url, channel_id):
-    """Обновляет ID канала в конфигурации"""
-    config = CHANNEL_CONFIGS.get(webhook_url)
-    if config and not config.get('channel_id'):
-        config['channel_id'] = channel_id
-        logger.info(f"📝 Обновлен channel_id для {config['name']}: {channel_id}")
-        return True
-    return False
-
-# ==================== TELEGRAM ФУНКЦИИ ====================
+# ==================== ОСНОВНЫЕ ФУНКЦИИ ====================
 def send_telegram_message(chat_id, text, parse_mode="HTML"):
     if not TELEGRAM_TOKEN or not chat_id:
         logger.error("❌ Не настроены переменные Telegram")
@@ -173,7 +136,7 @@ def send_telegram_message(chat_id, text, parse_mode="HTML"):
         response = requests.post(url, data=data, timeout=15)
         
         if response.status_code == 200:
-            logger.info(f"📱 Отправлено в Telegram ({chat_id}): {text[:100]}...")
+            logger.info(f"📱 Отправлено в Telegram ({chat_id})")
             return True
         elif response.status_code == 429:
             retry_after = response.json().get('parameters', {}).get('retry_after', 30)
@@ -214,7 +177,6 @@ def send_telegram_sticker(chat_id, sticker_id):
 
 def send_to_channel(text=None, sticker_id=None):
     if not channel_enabled:
-        logger.info("⏸️ Канал отключен")
         return False
     
     if not hasattr(send_to_channel, 'last_channel_message_time'):
@@ -223,10 +185,8 @@ def send_to_channel(text=None, sticker_id=None):
     current_time = time.time()
     time_since_last = current_time - send_to_channel.last_channel_message_time
     
-    if time_since_last < 2 and time_since_last >= 0:
-        wait_time = 2 - time_since_last
-        logger.info(f"⏸️ Защита от спама: жду {wait_time:.1f} сек")
-        time.sleep(wait_time)
+    if time_since_last < 2:
+        time.sleep(2 - time_since_last)
     
     send_to_channel.last_channel_message_time = time.time()
     
@@ -240,347 +200,203 @@ def send_to_channel(text=None, sticker_id=None):
 def send_to_bot(text):
     return send_telegram_message(TELEGRAM_BOT_CHAT_ID, text)
 
-# ==================== DISCORD API ====================
-def fetch_discord_channel_messages(channel_id, limit=10):
-    if not DISCORD_TOKEN:
-        logger.error("❌ Нет токена Discord")
-        return None
-    
-    if not channel_id or not isinstance(channel_id, (int, str)) or not str(channel_id).isdigit():
-        logger.error(f"❌ Неверный channel_id: {channel_id}")
-        return None
-    
+def get_discord_messages(channel_id):
     try:
-        url = f"https://discord.com/api/v10/channels/{channel_id}/messages?limit={limit}"
+        url = f"https://discord.com/api/v10/channels/{channel_id}/messages?limit=5"
         headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
         response = requests.get(url, headers=headers, timeout=15)
         
         if response.status_code == 200:
-            messages = response.json()
-            logger.info(f"📨 Получено {len(messages)} сообщений из канала {channel_id}")
-            return messages
+            return response.json()
         elif response.status_code == 429:
             retry_after = response.json().get('retry_after', 1)
             logger.warning(f"⚠️ Лимит Discord API, жду {retry_after} сек")
             time.sleep(retry_after)
             return None
         else:
-            logger.error(f"❌ Ошибка Discord API {response.status_code}: {response.text}")
+            logger.error(f"❌ Ошибка Discord API: {response.status_code}")
             return None
     except Exception as e:
         logger.error(f"❌ Ошибка подключения к Discord: {e}")
         return None
 
-# ==================== ОБРАБОТКА СООБЩЕНИЙ ====================
-def clean_text_for_display(text):
-    text = re.sub(r'<:[a-zA-Z0-9_]+:(\d+)>', '', text)
-    text = re.sub(r'\*\*', '', text)
-    text = re.sub(r'<t:\d+:[tR]>', '', text)
-    
-    lines = text.split('\n')
-    cleaned_lines = []
-    
-    for line in lines:
-        line = line.strip()
-        if line and ('x' in line or ':' in line or any(word in line.lower() for word in ['seeds', 'gear', 'alert', 'stock', 'egg', 'pass'])):
-            cleaned_lines.append(line)
-    
-    return '\n'.join(cleaned_lines)
-
-def extract_all_text_from_message(message):
-    content = message.get('content', '')
-    embeds = message.get('embeds', [])
-    
-    all_text = content
-    for embed in embeds:
-        if embed.get('title'):
-            all_text += f"\n{embed.get('title')}"
-        if embed.get('description'):
-            all_text += f"\n{embed.get('description')}"
-        for field in embed.get('fields', []):
-            field_name = field.get('name', '')
-            field_value = field.get('value', '')
-            all_text += f"\n{field_name} {field_value}"
-    
-    return all_text
-
-def format_message_for_bot(message):
-    content = message.get('content', '')
-    embeds = message.get('embeds', [])
-    
-    full_text = content
-    for embed in embeds:
-        if embed.get('title'):
-            title = re.sub(r'<t:\d+:[tR]>', '', embed.get('title', ''))
-            if title.strip():
-                full_text += f"\n\n{title}"
-        if embed.get('description'):
-            full_text += f"\n{embed.get('description')}"
-        for field in embed.get('fields', []):
-            field_name = field.get('name', '')
-            field_value = field.get('value', '')
-            if field_name and field_value:
-                full_text += f"\n\n{field_name}:\n{field_value}"
-    
-    cleaned_text = clean_text_for_display(full_text)
-    return cleaned_text.strip()
-
-def process_discord_message(message_data, webhook_url=None, channel_id=None):
+def process_message(message, channel_id):
     global found_seeds_count, bot_status, last_error
     
     try:
-        message_id = message_data.get('id')
+        message_id = message.get('id')
+        author = message.get('author', {}).get('username', '')
         
+        # Проверяем автора
+        if 'kiro' not in author.lower():
+            return False
+        
+        # Проверяем дубли
         if message_id in processed_messages_cache:
-            logger.debug(f"⏩ Пропускаем уже обработанное сообщение: {message_id}")
             return False
         
         processed_messages_cache.add(message_id)
         
-        author = message_data.get('author', {}).get('username', '')
-        is_bot = message_data.get('author', {}).get('bot', False)
+        # Очищаем текст
+        content = message.get('content', '')
+        embeds = message.get('embeds', [])
         
-        if not is_bot and 'kiro' not in author.lower():
-            logger.debug(f"⏩ Пропускаем сообщение от {author} (не Kiro)")
-            return False
+        all_text = content
+        for embed in embeds:
+            if embed.get('title'):
+                all_text += f"\n{embed.get('title')}"
+            if embed.get('description'):
+                all_text += f"\n{embed.get('description')}"
+            for field in embed.get('fields', []):
+                field_name = field.get('name', '')
+                field_value = field.get('value', '')
+                all_text += f"\n{field_name} {field_value}"
         
-        logger.info(f"🤖 Получено сообщение от {author}: {message_id}")
+        # Форматируем для бота
+        cleaned_text = re.sub(r'<:[a-zA-Z0-9_]+:(\d+)>', '', all_text)
+        cleaned_text = re.sub(r'\*\*', '', cleaned_text)
+        cleaned_text = re.sub(r'<t:\d+:[tR]>', '', cleaned_text)
         
         # Отправляем в бота
-        formatted_message = format_message_for_bot(message_data)
-        if formatted_message:
+        if cleaned_text.strip():
             current_time = datetime.now().strftime('%H:%M:%S')
-            config = get_channel_config_by_url(webhook_url) if webhook_url else None
-            channel_name = config['name'] if config else "Вебхук"
+            channel_name = CHANNEL_SCHEDULES.get(channel_id, {}).get('name', 'Неизвестный')
             
             bot_message = (
                 f"📥 Новое сообщение\n"
                 f"🤖 Автор: {author}\n"
                 f"📡 Канал: {channel_name}\n"
                 f"⏰ Время: {current_time}\n\n"
-                f"<code>{formatted_message}</code>"
+                f"<code>{cleaned_text[:2000]}</code>"
             )
             send_to_bot(bot_message)
         
         # Проверяем на наличие отслеживаемых предметов
-        full_search_text = extract_all_text_from_message(message_data)
-        search_text_lower = full_search_text.lower()
-        
-        found_tracked_items = []
+        search_text = all_text.lower()
+        found_items = []
         
         for seed_name, seed_config in TARGET_SEEDS.items():
             for keyword in seed_config['keywords']:
-                if keyword in search_text_lower:
+                if keyword in search_text:
                     found_seeds_count[seed_name] += 1
-                    found_tracked_items.append(seed_config['display_name'])
-                    logger.info(f"🎯 ОБНАРУЖЕН {seed_name.upper()}! Ключевое слово: '{keyword}'")
+                    found_items.append(seed_config['display_name'])
+                    logger.info(f"🎯 НАЙДЕН {seed_name.upper()} в канале {channel_name}!")
                     
                     # Отправляем стикер в канал
-                    sticker_sent = send_to_channel(sticker_id=seed_config['sticker_id'])
+                    send_to_channel(sticker_id=seed_config['sticker_id'])
+                    send_to_bot(f"✅ Стикер {seed_config['emoji']} отправлен в канал")
                     
-                    if sticker_sent:
-                        logger.info(f"✅ Стикер {seed_config['emoji']} отправлен в канал")
-                        send_to_bot(f"✅ Стикер {seed_config['emoji']} отправлен в канал")
-                    else:
-                        logger.error(f"❌ Ошибка отправки стикера {seed_config['emoji']}")
+                    # Запускаем burst режим для этого канала
+                    if channel_id in CHANNEL_SCHEDULES:
+                        CHANNEL_SCHEDULES[channel_id]['in_burst'] = True
+                        CHANNEL_SCHEDULES[channel_id]['burst_start'] = time.time()
+                        CHANNEL_SCHEDULES[channel_id]['burst_index'] = 0
+                        logger.info(f"🚀 Запускаю burst режим для {channel_name}")
         
-        # Если нашли отслеживаемые предметы, запускаем burst режим
-        if found_tracked_items and webhook_url:
-            config = get_channel_config_by_url(webhook_url)
-            if config and config.get('channel_id'):
-                config['last_update_time'] = time.time()
-                config['in_burst_mode'] = True
-                config['burst_index'] = 0
-                logger.info(f"🚀 Запускаю burst режим для {config['name']}")
-                schedule_next_burst_request(webhook_url)
-        
-        bot_status = "🟢 Получено сообщение через вебхук"
+        bot_status = "🟢 Работает нормально"
         last_error = None
-        return len(found_tracked_items) > 0
+        
+        return len(found_items) > 0
         
     except Exception as e:
-        error_msg = f"Ошибка обработки сообщения: {e}"
+        error_msg = f"Ошибка обработки: {e}"
         logger.error(f"💥 {error_msg}")
         bot_status = "🔴 Ошибка обработки"
         last_error = error_msg
-        send_to_bot(f"🚨 <b>Ошибка обработки:</b>\n<code>{error_msg}</code>")
         return False
 
-# ==================== РАСПИСАНИЕ ЗАПРОСОВ ====================
-def schedule_next_burst_request(webhook_url):
-    config = get_channel_config_by_url(webhook_url)
-    if not config or not config['in_burst_mode']:
-        return
+def check_channel(channel_id):
+    """Проверяет один канал"""
+    schedule = CHANNEL_SCHEDULES.get(channel_id, {})
     
-    burst_schedule = config['burst_schedule']
-    burst_index = config['burst_index']
-    
-    if burst_index >= len(burst_schedule):
-        config['in_burst_mode'] = False
-        config['burst_index'] = 0
-        logger.info(f"⏹️ Завершен burst режим для {config['name']}")
-        return
-    
-    delay = burst_schedule[burst_index]
-    execute_time = time.time() + delay
-    
-    request_queue.put({
-        'type': 'burst_request',
-        'webhook_url': webhook_url,
-        'execute_time': execute_time,
-        'delay': delay
-    })
-    
-    logger.info(f"📅 Запланирован burst запрос #{burst_index+1} для {config['name']} через {delay} сек")
-    config['burst_index'] += 1
-
-def execute_burst_request(webhook_url):
-    config = get_channel_config_by_url(webhook_url)
-    if not config or not config.get('channel_id'):
-        logger.error(f"❌ Нет channel_id для {config['name'] if config else 'unknown'}")
-        return
-    
-    logger.info(f"🔍 Выполняю burst запрос для {config['name']}")
-    
-    messages = fetch_discord_channel_messages(config['channel_id'])
-    if messages:
-        for message in messages[:5]:
-            process_discord_message(message, webhook_url, config['channel_id'])
-    
-    schedule_next_burst_request(webhook_url)
-
-# ==================== ВЕБХУК ОБРАБОТЧИК ====================
-@app.route('/discord_webhook', methods=['POST'])
-def discord_webhook():
-    try:
-        data = request.json
-        logger.info(f"📨 Получен вебхук от Discord")
+    # Определяем интервал проверки
+    if schedule.get('in_burst'):
+        # В burst режиме
+        burst_start = schedule.get('burst_start', 0)
+        burst_index = schedule.get('burst_index', 0)
+        burst_schedule = schedule.get('burst_schedule', [])
         
-        # Логируем для отладки
-        logger.debug(f"Вебхук данные: {json.dumps(data, indent=2)[:500]}...")
-        
-        # Получаем channel_id из вебхука
-        channel_id = data.get('channel_id')
-        webhook_id = data.get('webhook_id')
-        
-        # Ищем конфигурацию по webhook_id (содержится в URL)
-        webhook_url = None
-        for url, config in CHANNEL_CONFIGS.items():
-            if str(webhook_id) in url:
-                webhook_url = url
-                break
-        
-        if not webhook_url:
-            logger.warning(f"⚠️ Неизвестный вебхук: {webhook_id}")
-            return jsonify({'status': 'unknown_webhook'}), 200
-        
-        # Обновляем channel_id если он еще не сохранен
-        config = get_channel_config_by_url(webhook_url)
-        if config and not config.get('channel_id') and channel_id:
-            update_channel_id(webhook_url, channel_id)
-        
-        # Обрабатываем сообщение
-        found_items = process_discord_message(data, webhook_url, channel_id)
-        
-        if found_items:
-            logger.info("✅ Вебхук обработан, найдены отслеживаемые предметы")
+        if burst_index < len(burst_schedule):
+            # Время следующего burst запроса
+            next_burst_time = burst_start + burst_schedule[burst_index]
+            if time.time() >= next_burst_time:
+                # Выполняем burst запрос
+                schedule['burst_index'] = burst_index + 1
+                logger.info(f"🔍 Burst запрос #{burst_index+1} для {schedule.get('name')}")
+                return True
+            else:
+                # Еще не время
+                return False
         else:
-            logger.info("✅ Вебхук обработан, отслеживаемых предметов нет")
+            # Завершаем burst режим
+            schedule['in_burst'] = False
+            schedule['burst_start'] = None
+            schedule['burst_index'] = 0
+            logger.info(f"⏹️ Завершен burst режим для {schedule.get('name')}")
+            return True
+    else:
+        # Обычный режим - проверяем по base_interval
+        if not hasattr(check_channel, 'last_check_times'):
+            check_channel.last_check_times = {}
         
-        return jsonify({'status': 'ok'}), 200
-    
-    except Exception as e:
-        logger.error(f"❌ Ошибка обработки вебхука: {e}")
-        send_to_bot(f"🚨 <b>Ошибка вебхука:</b>\n<code>{e}</code>")
-        return jsonify({'status': 'error', 'message': str(e)}), 500
+        last_check = check_channel.last_check_times.get(channel_id, 0)
+        base_interval = schedule.get('base_interval', 60)
+        
+        if time.time() - last_check >= base_interval:
+            check_channel.last_check_times[channel_id] = time.time()
+            return True
+        else:
+            return False
 
-# ==================== РАБОТНИК ОЧЕРЕДИ ====================
-def queue_worker():
-    logger.info("👷 Запускаю работника очереди...")
+def monitor_discord():
+    logger.info("🔄 Запускаю мониторинг Discord...")
+    
+    # Ждем немного при старте
+    time.sleep(10)
     
     while True:
         try:
-            task = request_queue.get(timeout=1)
-            
-            current_time = time.time()
-            execute_time = task.get('execute_time', 0)
-            
-            if current_time < execute_time:
-                time_to_wait = execute_time - current_time
-                if time_to_wait > 1:
-                    request_queue.put(task)
-                    time.sleep(1)
-                continue
-            
-            task_type = task.get('type')
-            webhook_url = task.get('webhook_url')
-            
-            if task_type == 'burst_request' and webhook_url:
-                execute_burst_request(webhook_url)
-            
-            request_queue.task_done()
-            
-        except queue.Empty:
-            time.sleep(0.1)
-        except Exception as e:
-            logger.error(f"❌ Ошибка в работнике очереди: {e}")
-            time.sleep(1)
-
-# ==================== ФОЛБЭК ПРОВЕРКИ ====================
-def fallback_checker():
-    logger.info("🔄 Запускаю фолбэк проверку...")
-    check_interval = 300
-    
-    while True:
-        time.sleep(check_interval)
-        
-        try:
-            logger.info("🔍 Выполняю фолбэк проверку каналов...")
-            
-            for webhook_url, config in CHANNEL_CONFIGS.items():
-                if not config.get('in_burst_mode', False) and config.get('channel_id'):
-                    messages = fetch_discord_channel_messages(config['channel_id'])
+            # Проверяем каждый канал по его расписанию
+            for channel_id in DISCORD_CHANNEL_IDS:
+                if check_channel(channel_id):
+                    messages = get_discord_messages(channel_id)
                     if messages:
-                        for message in messages[:3]:
-                            process_discord_message(message, webhook_url, config['channel_id'])
+                        for message in messages:
+                            process_message(message, channel_id)
+            
+            # Чистим кэш если нужно
+            if len(processed_messages_cache) > 1000:
+                processed_messages_cache.clear()
+            
+            time.sleep(5)  # Короткая пауза между итерациями
             
         except Exception as e:
-            logger.error(f"❌ Ошибка фолбэк проверки: {e}")
+            logger.error(f"💥 Ошибка мониторинга: {e}")
+            time.sleep(30)
 
-# ==================== ПРОСТОЙ САМОПИНГ ====================
 def simple_self_pinger():
     global ping_count, last_ping_time
-    
-    logger.info("🏓 Запускаю простой самопинг...")
+    logger.info("🏓 Запускаю самопинг...")
     time.sleep(30)
     
     while True:
         try:
             ping_count += 1
             last_ping_time = datetime.now()
-            logger.info(f"🏓 Самопинг #{ping_count} в {last_ping_time.strftime('%H:%M:%S')}")
-            
+            logger.info(f"🏓 Самопинг #{ping_count}")
         except Exception as e:
             logger.error(f"❌ Ошибка самопинга: {e}")
-        
         time.sleep(300)
 
-# ==================== TELEGRAM КОМАНДЫ ====================
 def telegram_poller():
     global telegram_offset
-    
     logger.info("🤖 Запускаю Telegram поллер...")
     time.sleep(10)
     
     while True:
         try:
             url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
-            params = {
-                'offset': telegram_offset + 1,
-                'timeout': 10,
-                'limit': 1
-            }
-            
+            params = {'offset': telegram_offset + 1, 'timeout': 10, 'limit': 1}
             response = requests.get(url, params=params, timeout=15)
             
             if response.status_code == 200:
@@ -589,30 +405,15 @@ def telegram_poller():
                     updates = data['result']
                     for update in updates:
                         telegram_offset = update['update_id']
-                        
                         if 'message' in update:
                             message = update['message']
                             chat_id = message['chat']['id']
                             text = message.get('text', '')
                             
-                            if 'sticker' in message:
-                                sticker = message['sticker']
-                                file_id = sticker['file_id']
-                                emoji = sticker.get('emoji', '')
-                                
-                                sticker_info = (
-                                    f"🎯 <b>Информация о стикере:</b>\n"
-                                    f"🆔 File ID: <code>{file_id}</code>\n"
-                                    f"😊 Emoji: {emoji}"
-                                )
-                                send_telegram_message(chat_id, sticker_info)
-                                continue
-                            
                             if text.startswith('/'):
                                 handle_telegram_command(chat_id, text)
             
             time.sleep(5)
-            
         except Exception as e:
             logger.error(f"❌ Ошибка Telegram поллера: {e}")
             time.sleep(10)
@@ -620,29 +421,18 @@ def telegram_poller():
 def handle_telegram_command(chat_id, command):
     global channel_enabled
     
-    logger.info(f"🎯 Команда от {chat_id}: {command}")
-    
     if command == '/start':
-        seeds_list = "\n".join([f"{config['emoji']} {config['display_name']}" 
-                              for config in TARGET_SEEDS.values()])
-        
-        channels_info = "\n".join([f"{config['name']}" 
-                                 for config in CHANNEL_CONFIGS.values()])
+        seeds_list = "\n".join([f"{config['emoji']} {config['display_name']}" for config in TARGET_SEEDS.values()])
+        channels_list = "\n".join([f"• {sched.get('name', 'Неизвестный')}" for sched in CHANNEL_SCHEDULES.values()])
         
         welcome_text = (
-            "🚀 <b>НОВАЯ ВЕРСИЯ С ВЕБХУКАМИ!</b>\n\n"
-            "📡 <b>Мониторю через вебхуки:</b>\n"
-            f"{channels_info}\n\n"
+            "🚀 <b>БОТ ЗАПУЩЕН С ОПТИМИЗАЦИЕЙ ЗАПРОСОВ!</b>\n\n"
+            f"📡 <b>Мониторю каналы:</b>\n{channels_list}\n\n"
+            f"🎯 <b>Отслеживаю:</b>\n{seeds_list}\n\n"
             "⚡ <b>Новая логика:</b>\n"
-            "1. Получаю сообщения мгновенно через вебхуки\n"
-            "2. После сообщения запускаю серию запросов\n"
-            "3. Экономлю запросы к Discord API\n\n"
-            "📱 <b>Вам в бота:</b> Все сообщения от Kiro\n"
-            "📢 <b>В канал:</b> Стикеры при редких предметах\n\n"
-            f"🎯 <b>Отслеживаю:</b>\n"
-            f"{seeds_list}\n\n"
-            "🛡️ <b>Защита от спама:</b> 2 сек между сообщениями\n"
-            "🏓 <b>Самопинг:</b> Каждые 5 минут\n\n"
+            "• Разные интервалы для разных каналов\n"
+            "• Burst запросы после находки семян\n"
+            "• Экономия запросов к Discord\n\n"
             "📋 <b>Команды:</b>\n"
             "/status - Статус бота\n"
             "/enable - Включить канал\n"
@@ -664,51 +454,47 @@ def handle_telegram_command(chat_id, command):
     
     elif command == '/help':
         help_text = (
-            "📋 <b>Доступные команды:</b>\n\n"
-            "/start - Информация о боте\n"
-            "/status - Статус и статистика\n"
-            "/enable - Включить уведомления в канал\n"
-            "/disable - Выключить уведомления в канал\n"
-            "/help - Эта справка"
+            "📋 <b>Команды:</b>\n"
+            "/start - Информация\n"
+            "/status - Статус\n"
+            "/enable - Включить канал\n"
+            "/disable - Выключить канал\n"
+            "/help - Помощь"
         )
         send_telegram_message(chat_id, help_text)
     
     else:
-        send_telegram_message(chat_id, "❌ Неизвестная команда. Используйте /help")
+        send_telegram_message(chat_id, "❌ Неизвестная команда. /help")
 
 def send_bot_status(chat_id):
     global bot_status, last_error, channel_enabled, ping_count, last_ping_time, found_seeds_count
     
     uptime = datetime.now() - startup_time
     hours = uptime.total_seconds() / 3600
-    
     last_ping_str = "Еще не было" if not last_ping_time else last_ping_time.strftime('%H:%M:%S')
     
     seeds_stats = "\n".join([f"{config['emoji']} {config['display_name']}: {found_seeds_count.get(name, 0)} раз" 
                            for name, config in TARGET_SEEDS.items()])
     
     channels_info = []
-    for config in CHANNEL_CONFIGS.values():
-        channel_id_status = "✅" if config.get('channel_id') else "❌"
-        burst_status = "🟢 Активен" if config.get('in_burst_mode', False) else "⚪ Ожидание"
-        channels_info.append(f"{config['name']}: {burst_status} (ID: {channel_id_status})")
+    for channel_id, schedule in CHANNEL_SCHEDULES.items():
+        status = "🟢 Burst" if schedule.get('in_burst') else "⚪ Обычный"
+        channels_info.append(f"{schedule.get('name')}: {status}")
     
     status_text = (
-        f"📊 <b>Статус бота (Вебхуки)</b>\n\n"
+        f"📊 <b>Статус бота</b>\n\n"
         f"{bot_status}\n"
-        f"⏰ Время работы: {hours:.1f} часов\n"
-        f"📅 Запущен: {startup_time.strftime('%d.%m.%Y %H:%M')}\n"
+        f"⏰ Работает: {hours:.1f} часов\n"
         f"📢 Канал: {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}\n"
-        f"📡 Каналов: {len(CHANNEL_CONFIGS)} шт\n"
-        f"🏓 Самопинг: {ping_count} раз (последний: {last_ping_str})\n"
-        f"💾 В кэше: {len(processed_messages_cache)} сообщений\n\n"
-        f"📡 <b>Статус каналов:</b>\n" + "\n".join(channels_info) + "\n\n"
-        f"🎯 <b>Найдено предметов:</b>\n"
-        f"{seeds_stats}"
+        f"📡 Каналов: {len(CHANNEL_SCHEDULES)}\n"
+        f"🏓 Самопинг: {ping_count} раз\n"
+        f"💾 Кэш: {len(processed_messages_cache)} сообщений\n\n"
+        f"📡 <b>Каналы:</b>\n" + "\n".join(channels_info) + "\n\n"
+        f"🎯 <b>Найдено:</b>\n{seeds_stats}"
     )
     
     if last_error:
-        status_text += f"\n\n⚠️ <b>Последняя ошибка:</b>\n<code>{last_error}</code>"
+        status_text += f"\n\n⚠️ <b>Ошибка:</b>\n<code>{last_error}</code>"
     
     send_telegram_message(chat_id, status_text)
 
@@ -718,67 +504,26 @@ def home():
     uptime = datetime.now() - startup_time
     hours = uptime.total_seconds() / 3600
     
-    seeds_list = ", ".join([f"{config['emoji']} {config['display_name']}" 
-                          for config in TARGET_SEEDS.values()])
+    seeds_list = ", ".join([f"{config['emoji']} {config['display_name']}" for config in TARGET_SEEDS.values()])
     
     channels_list = []
-    for config in CHANNEL_CONFIGS.values():
-        channel_id_status = "✅ Настроен" if config.get('channel_id') else "⏳ Жду вебхук"
-        channels_list.append(f"• {config['name']} - {channel_id_status}")
-    
-    channels_info = "\n".join(channels_list)
+    for schedule in CHANNEL_SCHEDULES.values():
+        status = "🟢 Burst" if schedule.get('in_burst') else "⚪ Обычный"
+        channels_list.append(f"• {schedule.get('name')} - {status}")
     
     return f"""
     <html>
-        <head>
-            <title>🌱 Seed Monitor (Webhooks)</title>
-            <style>
-                body {{ font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }}
-                .status {{ background: #f0f8f0; padding: 20px; border-radius: 10px; margin: 20px 0; }}
-                .info {{ margin: 10px 0; }}
-                .channels {{ background: #e3f2fd; padding: 20px; margin: 10px 0; border-radius: 8px; }}
-                .seeds {{ background: #f3e5f5; padding: 20px; margin: 10px 0; border-radius: 8px; }}
-                .button {{ background: #4CAF50; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; margin: 5px; display: inline-block; }}
-                .button-disable {{ background: #f44336; }}
-                .webhook-info {{ background: #fff3e0; padding: 15px; border-radius: 8px; margin: 15px 0; }}
-                .status-good {{ color: green; }}
-                .status-waiting {{ color: orange; }}
-            </style>
-        </head>
+        <head><title>🌱 Seed Monitor</title></head>
         <body>
-            <h1>🌱 Мониторинг семян (Webhooks)</h1>
-            
-            <div class="status">
-                <h3>📊 Статус системы</h3>
-                <div class="info"><strong>Состояние:</strong> {bot_status}</div>
-                <div class="info"><strong>Время работы:</strong> {hours:.1f} часов</div>
-                <div class="info"><strong>Канал:</strong> {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}</div>
-                <div class="info"><strong>Самопинг:</strong> 🏓 {ping_count} раз</div>
-                <div class="info"><strong>В кэше:</strong> {len(processed_messages_cache)} сообщений</div>
-            </div>
-            
-            <div class="channels">
-                <h3>📡 Отслеживаемые каналы</h3>
-                <pre>{channels_info}</pre>
-            </div>
-            
-            <div class="seeds">
-                <h3>🎯 Отслеживаемые предметы</h3>
-                <div class="info">{seeds_list}</div>
-            </div>
-            
-            <div class="webhook-info">
-                <h3>⚡ Webhooks</h3>
-                <p>Бот получает сообщения мгновенно через Discord Webhooks.</p>
-                <p>После первого сообщения от Kiro автоматически определит ID каналов.</p>
-            </div>
-            
-            <div>
-                <h3>🎛️ Управление</h3>
-                <a href="/enable_channel" class="button">✅ Включить канал</a>
-                <a href="/disable_channel" class="button button-disable">⏸️ Выключить канал</a>
-                <a href="/health" class="button">🩺 Health Check</a>
-            </div>
+            <h1>🌱 Мониторинг семян</h1>
+            <p><strong>Статус:</strong> {bot_status}</p>
+            <p><strong>Время работы:</strong> {hours:.1f} часов</p>
+            <p><strong>Каналов:</strong> {len(CHANNEL_SCHEDULES)}</p>
+            <p><strong>Отслеживаю:</strong> {seeds_list}</p>
+            <h3>📡 Каналы:</h3>
+            <pre>{chr(10).join(channels_list)}</pre>
+            <p><a href="/enable_channel">✅ Включить канал</a> | 
+               <a href="/disable_channel">⏸️ Выключить канал</a></p>
         </body>
     </html>
     """
@@ -787,80 +532,48 @@ def home():
 def enable_channel_route():
     global channel_enabled
     channel_enabled = True
-    return "✅ Уведомления в канал ВКЛЮЧЕНЫ"
+    return "✅ Канал включен"
 
 @app.route('/disable_channel')
 def disable_channel_route():
     global channel_enabled
     channel_enabled = False
-    return "⏸️ Уведомления в канал ВЫКЛЮЧЕНЫ"
-
-@app.route('/health')
-def health_check():
-    return jsonify({
-        'status': 'healthy',
-        'timestamp': datetime.now().isoformat(),
-        'uptime': (datetime.now() - startup_time).total_seconds(),
-        'channels_configured': len(CHANNEL_CONFIGS),
-        'channels_with_id': sum(1 for config in CHANNEL_CONFIGS.values() if config.get('channel_id'))
-    })
+    return "⏸️ Канал выключен"
 
 # ==================== ЗАПУСК ====================
-def start_background_threads():
-    threads = []
+if __name__ == '__main__':
+    # Проверяем настройки
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHANNEL_ID or not TELEGRAM_BOT_CHAT_ID:
+        logger.error("❌ Не настроены переменные Telegram!")
     
-    worker_thread = threading.Thread(target=queue_worker, daemon=True, name="QueueWorker")
-    threads.append(worker_thread)
+    if not DISCORD_TOKEN:
+        logger.error("❌ Не настроен токен Discord!")
     
-    fallback_thread = threading.Thread(target=fallback_checker, daemon=True, name="FallbackChecker")
-    threads.append(fallback_thread)
+    if not DISCORD_CHANNEL_IDS:
+        logger.error("❌ Не указаны каналы Discord!")
     
-    pinger_thread = threading.Thread(target=simple_self_pinger, daemon=True, name="SelfPinger")
-    threads.append(pinger_thread)
+    logger.info(f"🚀 Запуск бота")
+    logger.info(f"📡 Каналы: {len(DISCORD_CHANNEL_IDS)}")
+    logger.info(f"🎯 Предметов: {len(TARGET_SEEDS)}")
     
-    telegram_thread = threading.Thread(target=telegram_poller, daemon=True, name="TelegramPoller")
-    threads.append(telegram_thread)
+    # Запускаем потоки
+    threads = [
+        threading.Thread(target=monitor_discord, daemon=True),
+        threading.Thread(target=telegram_poller, daemon=True),
+        threading.Thread(target=simple_self_pinger, daemon=True)
+    ]
     
     for thread in threads:
         thread.start()
-        time.sleep(1)
-        logger.info(f"✅ Запущен поток: {thread.name}")
+        logger.info(f"✅ Запущен {thread.name}")
     
-    return threads
-
-if __name__ == '__main__':
-    # Проверяем обязательные переменные
-    required_vars = ['TELEGRAM_TOKEN', 'TELEGRAM_CHANNEL_ID', 'TELEGRAM_BOT_CHAT_ID']
-    missing_vars = [var for var in required_vars if not os.getenv(var)]
-    
-    if missing_vars:
-        logger.error(f"❌ Отсутствуют переменные: {', '.join(missing_vars)}")
-    
-    webhooks_count = sum(1 for url in [WEBHOOK_SEEDS_URL, WEBHOOK_EGGS_URL, WEBHOOK_PASS_SHOP_URL] if url)
-    logger.info(f"🌐 Настроено {webhooks_count} вебхуков")
-    
-    if not CHANNEL_CONFIGS:
-        logger.error("❌ Нет настроенных каналов! Проверьте вебхуки.")
-    else:
-        logger.info(f"📡 Каналы для мониторинга:")
-        for url, config in CHANNEL_CONFIGS.items():
-            logger.info(f"  • {config['name']}")
-    
-    seeds_count = len(TARGET_SEEDS)
-    logger.info(f"🚀 Запуск бота с вебхуками")
-    logger.info(f"🎯 Отслеживаю {seeds_count} предметов")
-    logger.info(f"📡 Вебхук эндпоинт: /discord_webhook")
-    logger.info(f"🏓 Самопинг: каждые 5 минут")
-    
-    threads = start_background_threads()
-    
+    # Стартовое сообщение
     try:
         startup_msg = (
-            "🚀 <b>БОТ ЗАПУЩЕН С ВЕБХУКАМИ!</b>\n\n"
-            f"📡 <b>Мониторю каналы:</b> {len(CHANNEL_CONFIGS)}\n"
-            f"🎯 <b>Отслеживаю предметы:</b> {len(TARGET_SEEDS)}\n"
-            f"⚡ <b>Логика:</b> Вебхуки + burst запросы\n\n"
-            "📝 <b>Статус:</b> Жду первое сообщение от Kiro для определения ID каналов\n\n"
+            "🚀 <b>БОТ ЗАПУЩЕН С ОПТИМИЗАЦИЕЙ!</b>\n\n"
+            f"📡 <b>Каналов:</b> {len(DISCORD_CHANNEL_IDS)}\n"
+            f"🎯 <b>Предметов:</b> {len(TARGET_SEEDS)}\n"
+            f"⚡ <b>Логика:</b> Оптимизированные запросы\n\n"
             "✅ <b>Готов к работе!</b>\n"
             "Отправьте /status для проверки."
         )
@@ -868,5 +581,6 @@ if __name__ == '__main__':
     except Exception as e:
         logger.error(f"❌ Не удалось отправить стартовое сообщение: {e}")
     
+    # Запускаем Flask
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
