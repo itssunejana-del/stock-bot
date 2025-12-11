@@ -8,6 +8,14 @@ from datetime import datetime, timedelta
 import re
 import json
 
+# ==================== ЭКСТРЕННАЯ ПАУЗА ====================
+PAUSE_BOT = os.getenv('PAUSE_BOT', 'false').lower() == 'true'
+
+if PAUSE_BOT:
+    print("⏸️ БОТ ПРИОСТАНОВЛЕН НА 2 ЧАСА")
+    print("Discord ограничил запросы. Ожидаю снятия ограничений...")
+    time.sleep(7200)  # 2 часа
+    print("⏰ 2 часа прошли, продолжаю...")
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
