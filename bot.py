@@ -148,6 +148,44 @@ def load_bot_state():
             logger.info("📂 Файл состояния не найден. Начинаем с чистого листа.")
     except Exception as e:
         logger.error(f"❌ Ошибка загрузки состояния: {e}")
+# ==================== СИСТЕМА СОХРАНЕНИЯ ОТПРАВЛЕННЫХ СТИКЕРОВ ====================
+STICKERS_STATE_FILE = 'sent_stickers_state.json'
+sent_stickers_state = {}  # Формат: {"channel_id_itemname_hourcycle": true}
+
+def load_stickers_state():
+    """Загружает историю отправленных стикеров из файла."""
+    global sent_stickers_state
+    try:
+        if os.path.exists(STICKERS_STATE_FILE):
+            with open(STICKERS_STATE_FILE, 'r') as f:
+                sent_stickers_state = json.load(f)
+            logger.debug(f"🎯 Загружена история стикеров: {len(sent_stickers_state)} записей")
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки истории стикеров: {e}")
+        sent_stickers_state = {}
+
+def save_stickers_state():
+    """Сохраняет историю отправленных стикеров в файл."""
+    try:
+        with open(STICKERS_STATE_FILE, 'w') as f:
+            json.dump(sent_stickers_state, f, indent=2)
+        logger.debug("💾 История стикеров сохранена")
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения истории стикеров: {e}")
+
+def was_sticker_sent_in_cycle(channel_id, item_name):
+    """Проверяет, был ли стикер для этого предмета отправлен в текущем цикле."""
+    cycle_key = get_current_cycle_key(channel_id)
+    state_key = f"{cycle_key}_{item_name}"
+    return sent_stickers_state.get(state_key, False)
+
+def mark_sticker_sent_in_cycle(channel_id, item_name):
+    """Отмечает, что стикер для этого предмета отправлен в текущем цикле."""
+    cycle_key = get_current_cycle_key(channel_id)
+    state_key = f"{cycle_key}_{item_name}"
+    sent_stickers_state[state_key] = True
+    save_stickers_state()
+    logger.debug(f"📝 Отмечен отправленный стикер: {item_name} в цикле {cycle_key}")
 
 # ==================== ФУНКЦИИ ДЛЯ TELEGRAM ====================
 def send_telegram_message(chat_id, text, parse_mode="HTML", disable_notification=False):
@@ -329,25 +367,34 @@ def process_discord_message(message_data, channel_id):
                     logger.info(f"🎯 Найден {seed_config['emoji']} {seed_config['display_name']} в {channel_name}!")
                     break  # Не ищем другие ключевые слова для этого семени
 
-        # 4. ОБРАБОТКА НАЙДЕННЫХ ПРЕДМЕТОВ
-        sticker_sent_in_this_message = False
-        if found_items:
-            # Определяем уникальный ключ для кэша стикеров в этом цикле обновления
-            current_cycle_key = get_current_cycle_key(channel_id)
+       # 4. ОБРАБОТКА НАЙДЕННЫХ ПРЕДМЕТОВ
+sticker_sent_in_this_message = False
+if found_items:
+    # Определяем уникальный ключ для кэша стикеров в этом цикле обновления
+    current_cycle_key = get_current_cycle_key(channel_id)
 
-            for seed_config in found_items:
-                cache_key = f"{current_cycle_key}_{seed_config['display_name']}"
-                # Отправляем стикер, только если он еще не был отправлен в этом цикле
-                if cache_key not in sent_stickers_cache:
-                    if send_to_channel(sticker_id=seed_config['sticker_id']):
-                        sent_stickers_cache[cache_key] = True
-                        sticker_sent_in_this_message = True
-                        # Уведомляем в личку о отправке стикера
-                        send_to_bot(f"✅ Стикер {seed_config['emoji']} отправлен в канал из {channel_name}.", disable_notification=True)
-                    else:
-                        logger.error(f"❌ Не удалось отправить стикер {seed_config['emoji']}.")
-                else:
-                    logger.debug(f"⏭️ Стикер {seed_config['emoji']} уже был отправлен в этом цикле.")
+    for seed_config in found_items:
+        item_name = seed_config['display_name']
+        cache_key = f"{current_cycle_key}_{item_name}"
+        
+        # ПРОВЕРКА 1: Не отправлен ли в текущей сессии (память)
+        # ПРОВЕРКА 2: Не отправлен ли до перезапуска (файл)
+        if (cache_key not in sent_stickers_cache and 
+            not was_sticker_sent_in_cycle(channel_id, item_name)):
+            
+            if send_to_channel(sticker_id=seed_config['sticker_id']):
+                # Сохраняем в ДВА места:
+                sent_stickers_cache[cache_key] = True  # Память (быстрый доступ)
+                mark_sticker_sent_in_cycle(channel_id, item_name)  # Файл (переживает перезапуск)
+                
+                sticker_sent_in_this_message = True
+                # Уведомляем в личку о отправке стикера
+                send_to_bot(f"✅ Стикер {seed_config['emoji']} отправлен в канал из {channel_name}.", disable_notification=True)
+                logger.info(f"🎯 Стикер {seed_config['emoji']} {item_name} отправлен и запомнен.")
+            else:
+                logger.error(f"❌ Не удалось отправить стикер {seed_config['emoji']}.")
+        else:
+            logger.debug(f"⏭️ Стикер {seed_config['emoji']} {item_name} уже был отправлен в этом цикле.")
 
         # 5. ОТПРАВКА ИНФОРМАЦИИ В ЛИЧКУ БОТА
         # Отправляем всегда, если нашли отслеживаемые предметы, или если это первое сообщение после простоя
@@ -378,13 +425,21 @@ def process_discord_message(message_data, channel_id):
         return False
 
 def get_current_cycle_key(channel_id):
-    """Генерирует ключ для кэша стикеров, уникальный для текущего цикла обновления канала."""
+    """Генерирует уникальный ключ для каждого цикла обновления в сутках."""
     now = datetime.now()
     cycle_length = CHANNEL_CYCLE_MINUTES.get(channel_id, 5)
-    # Для 5-минутных циклов: ключ обновляется каждые 5 минут
-    # Для 30-минутных циклов: ключ обновляется каждые 30 минут
-    cycle_number = now.minute // cycle_length
-    return f"{channel_id}_{now.hour:02d}{cycle_number:02d}"
+    
+    # Вычисляем номер цикла с ПОЛНОЧИ
+    total_minutes_since_midnight = now.hour * 60 + now.minute
+    cycle_number = total_minutes_since_midnight // cycle_length
+    
+    # Для отладки - можно залогировать
+    if now.minute % cycle_length == 0 and now.second < 5:
+        logger.debug(f"🔄 Цикл #{cycle_number} для {CHANNEL_NAMES.get(channel_id)} ({cycle_length} мин)")
+    
+    # Уникальный ключ: дата_номер_цикла_канал
+    date_str = now.strftime('%Y%m%d')
+    return f"{date_str}_{cycle_number:04d}_{channel_id}"  # 4 цифры для номера цикла
 
 def should_check_channel_now(channel_id):
     """Определяет, нужно ли прямо сейчас делать запрос к каналу согласно расписанию."""
@@ -410,6 +465,7 @@ def schedule_monitor():
     """Главный цикл мониторинга. Проверяет расписание и выполняет запросы к Discord."""
     logger.info("👁️‍🗨️ Монитор расписания запущен.")
     load_bot_state()  # Загружаем сохраненное состояние при старте
+    load_stickers_state()  # Загружаем историю отправленных стикеров
     send_to_bot("🚀 **Мониторинг Discord запущен по новому расписанию.**\nБот запомнил последние обработанные сообщения и не будет присылать старые.")
 
     # Инициализация: делаем первый запрос, чтобы узнать последние сообщения, но не шлем уведомления
