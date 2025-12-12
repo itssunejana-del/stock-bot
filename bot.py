@@ -99,7 +99,6 @@ channel_enabled = True
 found_items_count = {name: 0 for name in TARGET_ITEMS.keys()}
 discord_request_count = 0
 last_discord_request = 0
-last_check_times = {}  # Для отслеживания времени последней проверки
 
 # Файлы для сохранения состояния
 STATE_FILE = 'bot_state.json'
@@ -229,18 +228,18 @@ def send_to_bot(text, disable_notification=False):
     return send_telegram_message(TELEGRAM_BOT_CHAT_ID, text, disable_notification=disable_notification)
 
 # ==================== DISCORD API С УЛУЧШЕННОЙ ЗАЩИТОЙ ====================
-def fetch_discord_messages(channel_id, limit=2):  # Уменьшил с 3 до 2
+def fetch_discord_messages(channel_id, limit=2):
     """Безопасно получает сообщения из Discord с защитой от лимитов"""
     global discord_request_count, last_discord_request
     
     if not DISCORD_TOKEN or not channel_id:
         return None
     
-    # УВЕЛИЧЕННАЯ ЗАЩИТА: не чаще 1 запроса в 10 секунд
+    # ЗАЩИТА: не чаще 1 запроса в 15 секунд
     current_time = time.time()
     time_since_last = current_time - last_discord_request
-    if time_since_last < 10:  # Было 2, стало 10 секунд
-        sleep_time = 10 - time_since_last
+    if time_since_last < 15:
+        sleep_time = 15 - time_since_last
         logger.debug(f"⏸️ Защита от лимитов Discord: жду {sleep_time:.1f} сек")
         time.sleep(sleep_time)
     
@@ -280,7 +279,7 @@ def fetch_discord_messages(channel_id, limit=2):  # Уменьшил с 3 до 2
                 
         elif response.status_code == 429:
             error_data = response.json()
-            retry_after = error_data.get('retry_after', 5.0)  # Увеличил дефолт
+            retry_after = error_data.get('retry_after', 5.0)
             logger.warning(f"⏳ Discord API лимит. Жду {retry_after} сек.")
             time.sleep(retry_after)
             return None
@@ -310,12 +309,25 @@ def extract_text_from_message(message):
     
     return full_text
 
-# ==================== ОСНОВНАЯ ЛОГИКА ====================
+# ==================== ОСНОВНАЯ ЛОГИКА С ЗАЩИТОЙ ОТ ДУБЛИРОВАНИЯ ====================
 def process_discord_messages(channel_id):
-    """Обрабатывает сообщения из конкретного канала - ИСПРАВЛЕННАЯ"""
+    """Обрабатывает сообщения из конкретного канала с защитой от дублирования"""
     global last_processed_ids, found_items_count, bot_status
     
     channel_name = CHANNEL_NAMES.get(channel_id, channel_id)
+    
+    # 🛡️ ЗАЩИТА: не проверяем канал чаще чем раз в 2 минуты
+    current_time = time.time()
+    if not hasattr(process_discord_messages, 'last_channel_check'):
+        process_discord_messages.last_channel_check = {}
+    
+    if channel_id in process_discord_messages.last_channel_check:
+        time_since_last = current_time - process_discord_messages.last_channel_check[channel_id]
+        if time_since_last < 120:  # 2 минуты
+            logger.debug(f"⏸️ Защита: {channel_name} проверялся {time_since_last:.0f} сек назад, пропускаю")
+            return False
+    
+    process_discord_messages.last_channel_check[channel_id] = current_time
     
     # Получаем сообщения
     messages = fetch_discord_messages(channel_id, limit=2)
@@ -336,11 +348,11 @@ def process_discord_messages(channel_id):
         if last_id and int(message_id) <= int(last_id):
             continue
         
-        # Добавляем в кэш (но ограничиваем размер)
+        # Добавляем в кэш (с ограничением размера)
         processed_messages_cache.add(message_id)
-        if len(processed_messages_cache) > 100:
-            # Удаляем самые старые
-            oldest = list(processed_messages_cache)[:50]
+        if len(processed_messages_cache) > 50:
+            # Удаляем самые старые сообщения
+            oldest = list(processed_messages_cache)[:20]
             for msg_id in oldest:
                 processed_messages_cache.remove(msg_id)
         
@@ -367,12 +379,12 @@ def process_discord_messages(channel_id):
         if found_items_in_message:
             found_any = True
             
-            # Отправляем стикер в канал
+            # Отправляем стикер в канал для КАЖДОГО найденного предмета
             for item in found_items_in_message:
                 if send_to_channel(sticker_id=item['sticker_id']):
                     # Отправляем уведомление в бота (ТОЛЬКО при находке!)
-                    current_time = datetime.now().strftime('%H:%M:%S')
-                    notification = f"✅ Найден {item['emoji']} {item['display_name']} в {current_time}"
+                    current_time_str = datetime.now().strftime('%H:%M:%S')
+                    notification = f"✅ Найден {item['emoji']} {item['display_name']} в {current_time_str}"
                     send_to_bot(notification, disable_notification=False)
                     logger.info(f"✅ Стикер {item['emoji']} отправлен в канал")
                 else:
@@ -381,37 +393,38 @@ def process_discord_messages(channel_id):
         # Обновляем последний обработанный ID
         last_processed_ids[channel_id] = message_id
     
-    # Сохраняем состояние если что-то нашли
-    if found_any:
+    # Сохраняем состояние если что-то нашли или обновили ID
+    if found_any or (last_id != last_processed_ids.get(channel_id)):
         save_bot_state()
-        logger.debug(f"💾 Состояние сохранено после находки в {channel_name}")
+        logger.debug(f"💾 Состояние сохранено для {channel_name}")
     
     bot_status = f"🟢 Проверен {channel_name}"
     return found_any
 
-# ==================== ПРОСТОЙ МОНИТОРИНГ БЕЗ СЛОЖНОГО РАСПИСАНИЯ ====================
+# ==================== ПРОСТОЙ И НАДЕЖНЫЙ МОНИТОРИНГ ====================
 def schedule_monitor():
-    """Основной цикл мониторинга - УПРОЩЕННЫЙ"""
-    logger.info("👁️‍🗨️ Запуск упрощенного мониторинга...")
+    """Основной цикл мониторинга - ПРОСТОЙ И НАДЕЖНЫЙ"""
+    logger.info("👁️‍🗨️ Запуск надежного мониторинга...")
     load_bot_state()
     
-    # Инициализируем время последней проверки
+    # Инициализируем время последней проверки ТЕКУЩИМ временем минус интервал
+    current_time = time.time()
     last_check_times = {
-        SEEDS_CHANNEL_ID: 0,
-        EGGS_CHANNEL_ID: 0,
-        PASS_SHOP_CHANNEL_ID: 0
+        SEEDS_CHANNEL_ID: current_time - 180,  # 3 минуты назад (проверим сразу)
+        EGGS_CHANNEL_ID: current_time - 300,   # 5 минут назад
+        PASS_SHOP_CHANNEL_ID: current_time - 240  # 4 минуты назад
     }
     
     # РАЗНЫЕ ИНТЕРВАЛЫ ДЛЯ КАЖДОГО КАНАЛА (в секундах)
     CHECK_INTERVALS = {
         SEEDS_CHANNEL_ID: 180,    # 3 минуты
         EGGS_CHANNEL_ID: 300,     # 5 минут
-        PASS_SHOP_CHANNEL_ID: 240 # 4 минуты
+        PASS_SHOP_CHANNEL_ID: 240  # 4 минуты
     }
     
     # Отправляем стартовое сообщение
     startup_msg = (
-        "🚀 <b>УПРОЩЕННЫЙ мониторинг Kiro запущен</b>\n\n"
+        "🚀 <b>НАДЕЖНЫЙ мониторинг Kiro запущен</b>\n\n"
         "🎯 <b>Отслеживаю:</b>\n"
         "• 🌱 Семена: Tomato, Octobloom, Zebrazinkle, Peppermint Vine\n"
         "• 🥚 Яйца: Gem Egg\n"
@@ -422,9 +435,11 @@ def schedule_monitor():
         "• Пасс-шоп: каждые 4 минуты\n\n"
         "📢 <b>В канал:</b> Только стикеры при находке\n"
         "📱 <b>Вам:</b> Только уведомления о находках\n\n"
-        "✅ <b>Защита от лимитов Discord активна</b>"
+        "✅ <b>Защита от лимитов Discord активна (1 запрос/15 сек)</b>"
     )
     send_to_bot(startup_msg)
+    
+    logger.info(f"⏰ Начальные времена проверки: Семена -180с, Яйца -300с, Пасс-шоп -240с")
     
     while True:
         try:
@@ -437,7 +452,7 @@ def schedule_monitor():
                 
                 if time_since_last >= interval:
                     channel_name = CHANNEL_NAMES.get(channel_id, channel_id)
-                    logger.info(f"🕐 Проверяю {channel_name} (последняя проверка: {time_since_last:.0f} сек назад)...")
+                    logger.info(f"🕐 Проверяю {channel_name} ({time_since_last:.0f} сек с последней проверки)...")
                     
                     found = process_discord_messages(channel_id)
                     if found:
@@ -449,7 +464,7 @@ def schedule_monitor():
                     time.sleep(5)  # 5 секунд между запросами
             
             # Пауза между циклами проверки
-            logger.debug(f"💤 Ожидаю 30 сек до следующей проверки необходимости...")
+            logger.debug("💤 Ожидаю 30 секунд до следующей проверки...")
             time.sleep(30)
             
         except Exception as e:
@@ -507,7 +522,6 @@ def self_pinger():
     
     while True:
         try:
-            # Просто логируем, не делаем запросы чтобы не нагружать
             logger.info("🏓 Самопинг: сервис активен")
         except Exception as e:
             logger.error(f"❌ Ошибка самопинга: {e}")
@@ -531,7 +545,7 @@ def home():
     return f"""
     <html>
     <head>
-        <title>🌱 Упрощенный мониторинг Kiro</title>
+        <title>🌱 Надежный мониторинг Kiro</title>
         <meta charset="utf-8">
         <style>
             body {{ font-family: Arial, sans-serif; margin: 40px; }}
@@ -551,7 +565,7 @@ def home():
         </style>
     </head>
     <body>
-        <h1>🌱 Упрощенный мониторинг Kiro</h1>
+        <h1>🌱 Надежный мониторинг Kiro</h1>
         
         <div class="card">
             <h2>📊 Статус системы</h2>
@@ -567,6 +581,7 @@ def home():
             <a href="/enable" class="button button-enable">✅ Включить канал</a>
             <a href="/disable" class="button button-disable">⏸️ Выключить канал</a>
             <a href="/status" class="button">📊 Статус</a>
+            <a href="/health" class="button">❤️ Здоровье</a>
         </div>
         
         <div class="card">
@@ -587,7 +602,8 @@ def home():
             <h2>📱 Логика работы</h2>
             <p><strong>📢 В Telegram-канал:</strong> Только стикеры при находке предметов</p>
             <p><strong>🤖 Вам в бота:</strong> Только уведомления "✅ Найден [предмет]"</p>
-            <p><strong>🔄 Расписание:</strong> Упрощенное с защитой от лимитов</p>
+            <p><strong>🔄 Расписание:</strong> Семена-3мин, Яйца-5мин, Пасс-шоп-4мин</p>
+            <p><strong>🛡️ Защита Discord:</strong> 1 запрос в 15 секунд</p>
             <p><strong>💾 Сохранение:</strong> Состояние сохраняется между перезапусками</p>
         </div>
     </body>
@@ -658,19 +674,21 @@ def health_check():
         'uptime_seconds': (datetime.now() - bot_start_time).total_seconds(),
         'discord_requests': discord_request_count,
         'channel_enabled': channel_enabled,
-        'processed_messages': len(processed_messages_cache)
+        'processed_messages': len(processed_messages_cache),
+        'found_items_total': sum(found_items_count.values())
     })
 
 # ==================== ЗАПУСК ====================
 if __name__ == '__main__':
     logger.info("=" * 60)
-    logger.info("🚀 ЗАПУСК УПРОЩЕННОГО МОНИТОРИНГА KIRO")
+    logger.info("🚀 ЗАПУСК НАДЕЖНОГО МОНИТОРИНГА KIRO")
     logger.info("=" * 60)
     logger.info("📱 Telegram-бот: Только уведомления о находках")
     logger.info("📢 Telegram-канал: Только стикеры при находке")
     logger.info("🎯 Отслеживаю 6 предметов в 3 каналах")
     logger.info("🔄 Интервалы: Семена-3мин, Яйца-5мин, Пасс-шоп-4мин")
-    logger.info("🛡️ Защита от лимитов Discord: 1 запрос/10 секунд")
+    logger.info("🛡️ Защита Discord: 1 запрос/15 секунд")
+    logger.info("🛡️ Защита от дублей: Не чаще 1 проверки/2 минуты на канал")
     logger.info("💾 Сохранение состояния: ВКЛЮЧЕНО")
     logger.info("=" * 60)
     
