@@ -33,8 +33,9 @@ missing = [var for var in REQUIRED_VARS if not os.getenv(var)]
 if missing:
     logger.error(f"❌ Отсутствуют переменные: {missing}")
 
-# ==================== ОТСЛЕЖИВАЕМЫЕ ПРЕДМЕТЫ ====================
+# ==================== ОТСЛЕЖИВАЕМЫЕ ПРЕДМЕТЫ (ВСЕ 6!) ====================
 TARGET_ITEMS = {
+    # 🌱 СЕМЕНА (5-минутный цикл)
     'tomato': {
         'keywords': ['tomato', 'томат', ':tomato'],
         'sticker_id': "CAACAgIAAxkBAAEP-3lpOtdl3thyaZN8BfxTSAvD6kEkKgACf3sAAoEeWUgkKobs-st7ojYE",
@@ -56,13 +57,15 @@ TARGET_ITEMS = {
         'display_name': 'Zebrazinkle',
         'channels': [SEEDS_CHANNEL_ID]
     },
-    'peppermint_vine': {
+    'peppermint_vine': {  # 🌿 В СЕМЕНАХ!
         'keywords': ['peppermint vine', 'peppermintvine', ':peppermintvine'],
         'sticker_id': "CAACAgIAAxkBAAEP9hZpNtYLGgXJ5UmFIzEjQ6tL6jX-_QACrokAAk1ouUn1z9iCPYIanzYE",
         'emoji': '🌿',
         'display_name': 'Peppermint Vine',
         'channels': [SEEDS_CHANNEL_ID]
     },
+    
+    # 🥚 ЯЙЦА (30-минутный цикл)
     'gem_egg': {
         'keywords': ['gem egg', 'gemegg', ':gemegg'],
         'sticker_id': "CAACAgIAAxkBAAEP1b9pIXhSl-ElpsKgOEEY-8oOmJ1qnAACI4MAAq6w2EinW-vu8EV_RzYE",
@@ -70,6 +73,8 @@ TARGET_ITEMS = {
         'display_name': 'Gem Egg',
         'channels': [EGGS_CHANNEL_ID]
     },
+    
+    # 🎫 ПАСС-ШОП (5-минутный цикл)
     'pollen_cone': {
         'keywords': ['pollen cone', 'pollencone', ':pollencone'],
         'sticker_id': "CAACAgIAAxkBAAEP-4hpOtmoKIOXpzx89yFx3StQK77KzQACQI8AAuZU2Emfi_MTLWoHDjYE",
@@ -98,12 +103,15 @@ channel_enabled = True
 found_items_count = {name: 0 for name in TARGET_ITEMS.keys()}
 discord_request_count = 0
 last_discord_request = 0
-cycle_active_flags = {}  # Флаги активных циклов для каждого канала
+
+# Система прерывания циклов
+cycle_active_flags = {}  # True = цикл активен, False = прерван
 found_in_current_cycle = {}  # Найденные предметы в текущем цикле
+check_counters = {}  # Счетчики проверок для каждого канала
 
 STATE_FILE = 'bot_state.json'
 
-# ==================== УМНОЕ РАСПИСАНИЕ ====================
+# ==================== УМНОЕ РАСПИСАНИЕ С ПРЕРЫВАНИЕМ ====================
 CHANNEL_SCHEDULES = {
     SEEDS_CHANNEL_ID: [  # 🌱 Семена: 3 проверки за 5-минутный цикл
         (0, 20),  # 20 сек
@@ -315,7 +323,7 @@ def extract_text_from_message(message):
     
     return full_text
 
-# ==================== УМНОЕ РАСПИСАНИЕ С ПРЕРЫВАНИЕМ ====================
+# ==================== УМНОЕ РАСПИСАНИЕ С ПОЛНЫМ ОТКЛЮЧЕНИЕМ ====================
 def should_check_channel_now(channel_id):
     """Определяет, нужно ли проверять канал прямо сейчас по расписанию"""
     now = datetime.now()
@@ -325,10 +333,22 @@ def should_check_channel_now(channel_id):
     cycle_length = CHANNEL_CYCLE_LENGTHS.get(channel_id, 5)
     minute_in_cycle = minute % cycle_length
     
-    # Если цикл уже был прерван - не проверяем
-    if channel_id in cycle_active_flags and not cycle_active_flags[channel_id]:
-        return False
+    channel_name = CHANNEL_NAMES.get(channel_id, channel_id)
     
+    # ВАЖНОЕ ИСПРАВЛЕНИЕ: Если цикл прерван - не проверяем до начала нового цикла
+    if channel_id in cycle_active_flags and not cycle_active_flags[channel_id]:
+        # Проверяем, не начался ли новый цикл (первые 5 секунд)
+        if minute_in_cycle == 0 and second < 5:
+            # Новый цикл! Сбрасываем флаг и счетчик
+            cycle_active_flags[channel_id] = True
+            check_counters[channel_id] = 0
+            logger.debug(f"🔄 Новый цикл для {channel_name}")
+            # Продолжаем проверку
+        else:
+            # Цикл все еще прерван - не проверяем
+            return False
+    
+    # Если цикл активен - проверяем по расписанию
     schedule = CHANNEL_SCHEDULES.get(channel_id, [])
     for check_minute, check_second in schedule:
         if minute_in_cycle == check_minute and second == check_second:
@@ -346,7 +366,7 @@ def process_discord_messages(channel_id, check_number):
     messages = fetch_discord_messages(channel_id, limit=2)
     if not messages:
         logger.info(f"📭 Проверка #{check_number}: В {channel_name} нет сообщений от Kiro")
-        return (False, False)  # Не нашли Kiro, продолжаем цикл
+        return (False, False)
     
     found_kiro = False
     found_items = False
@@ -386,7 +406,8 @@ def process_discord_messages(channel_id, check_number):
             for keyword in item_config['keywords']:
                 if keyword.lower() in text:
                     # Проверяем, не находили ли уже в этом цикле
-                    cycle_key = f"{channel_id}_{datetime.now().strftime('%H%M')[:4]}"
+                    now = datetime.now()
+                    cycle_key = f"{channel_id}_{now.hour:02d}{now.minute:02d}"
                     item_key = f"{cycle_key}_{item_name}"
                     
                     if item_key not in found_in_current_cycle:
@@ -421,81 +442,82 @@ def process_discord_messages(channel_id, check_number):
 
 # ==================== ГЛАВНЫЙ МОНИТОР ====================
 def schedule_monitor():
-    """Основной монитор с умным прерыванием циклов"""
-    logger.info("👁️‍🗨️ Запуск умного мониторинга с прерыванием циклов...")
+    """Основной монитор с полным отключением циклов"""
+    logger.info("👁️‍🗨️ Запуск умного мониторинга с полным отключением циклов...")
     load_bot_state()
     
-    # Инициализируем флаги активных циклов
+    # Инициализируем флаги и счетчики
     for channel_id in [SEEDS_CHANNEL_ID, EGGS_CHANNEL_ID, PASS_SHOP_CHANNEL_ID]:
         cycle_active_flags[channel_id] = True
+        check_counters[channel_id] = 0
     
     # Отправляем стартовое сообщение
     startup_msg = (
         "🚀 <b>УМНЫЙ мониторинг Kiro запущен</b>\n\n"
-        "🎯 <b>Логика с прерыванием циклов:</b>\n"
-        "• Нашли Kiro → прекращаем проверки в этом цикле\n"
+        "🎯 <b>Логика с полным отключением:</b>\n"
+        "• Нашли Kiro → прекращаем проверки до следующего цикла\n"
         "• Нашли предметы → отправляем стикер\n"
         "• Не нашли Kiro → продолжаем по расписанию\n\n"
         "🔄 <b>Расписание проверок:</b>\n"
         "• 🌱 Семена: 20с, 40с, 1м (3 проверки)\n"
         "• 🥚 Яйца: 30с, 1м, 2м, 5м, 10м (5 проверок)\n"
         "• 🎫 Пасс-шоп: 40с, 1м10с (2 проверки)\n\n"
+        "📦 <b>Отслеживаю 6 предметов:</b>\n"
+        "• 🌱 Семена: 🍅 Tomato, 🐙 Octobloom, 🦓 Zebrazinkle, 🌿 Peppermint Vine\n"
+        "• 🥚 Яйца: 💎 Gem Egg\n"
+        "• 🎫 Пасс-шоп: 🍯 Pollen Cone\n\n"
         "✅ <b>Готов к работе!</b>"
     )
     send_to_bot(startup_msg)
     
-    # Счетчики проверок для каждого канала
-    check_counters = {
-        SEEDS_CHANNEL_ID: 0,
-        EGGS_CHANNEL_ID: 0,
-        PASS_SHOP_CHANNEL_ID: 0
-    }
-    
     while True:
         try:
             now = datetime.now()
-            current_minute = now.minute
             
             # Проверяем каждый канал
             for channel_id in [SEEDS_CHANNEL_ID, EGGS_CHANNEL_ID, PASS_SHOP_CHANNEL_ID]:
                 channel_name = CHANNEL_NAMES.get(channel_id, channel_id)
                 
-                # Проверяем, не начался ли новый цикл
-                cycle_length = CHANNEL_CYCLE_LENGTHS.get(channel_id, 5)
-                if current_minute % cycle_length == 0:
-                    # Новый цикл! Сбрасываем флаг
-                    cycle_active_flags[channel_id] = True
-                    check_counters[channel_id] = 0
-                    logger.debug(f"🔄 Начался новый цикл для {channel_name}")
-                
                 # Проверяем по расписанию
-                if should_check_channel_now(channel_id) and cycle_active_flags.get(channel_id, True):
+                if should_check_channel_now(channel_id):
                     check_counters[channel_id] += 1
                     logger.info(f"🕐 Проверка #{check_counters[channel_id]} для {channel_name}...")
                     
                     found_kiro, found_items = process_discord_messages(channel_id, check_counters[channel_id])
                     
                     if found_kiro:
-                        # Нашли Kiro - прерываем цикл
+                        # Нашли Kiro - прерываем цикл (полное отключение)
                         cycle_active_flags[channel_id] = False
                         if found_items:
-                            logger.info(f"✅ Найдены предметы в {channel_name} - цикл прерван")
+                            logger.info(f"✅ Найдены предметы в {channel_name} - цикл ПРЕРВАН до следующего обновления")
                         else:
-                            logger.info(f"📭 Найден Kiro без предметов в {channel_name} - цикл прерван")
+                            logger.info(f"📭 Найден Kiro без предметов в {channel_name} - цикл ПРЕРВАН до следующего обновления")
                     else:
                         logger.info(f"📭 Не нашли Kiro в {channel_name} - продолжаем цикл")
                     
                     # Пауза между запросами
                     time.sleep(2)
             
-            # Очистка кэша найденных предметов (каждые 10 минут)
+            # Очистка старых записей о найденных предметах (каждые 10 минут)
             if now.minute % 10 == 0 and now.second < 5:
                 old_size = len(found_in_current_cycle)
                 if old_size > 50:
-                    # Оставляем только последние 20 записей
-                    keys = list(found_in_current_cycle.keys())
-                    for key in keys[:-20]:
+                    # Удаляем записи старше 2 часов
+                    current_time_key = f"{now.hour:02d}{now.minute:02d}"
+                    keys_to_delete = []
+                    for key in found_in_current_cycle.keys():
+                        # Ключ формата: channelId_HHMM_itemName
+                        parts = key.split('_')
+                        if len(parts) >= 2:
+                            key_time = parts[1]
+                            # Если разница больше 200 минут (старше 2 часов)
+                            time_diff = abs(int(current_time_key) - int(key_time))
+                            if time_diff > 200:
+                                keys_to_delete.append(key)
+                    
+                    for key in keys_to_delete:
                         del found_in_current_cycle[key]
+                    
                     logger.debug(f"🧹 Очищен кэш предметов: {old_size} -> {len(found_in_current_cycle)}")
             
             time.sleep(0.5)
@@ -516,6 +538,7 @@ def status_monitor():
             uptime = datetime.now() - bot_start_time
             uptime_hours = uptime.total_seconds() / 3600
             
+            # Статистика находок
             items_stats = []
             for item_name, count in found_items_count.items():
                 if count > 0:
@@ -524,18 +547,22 @@ def status_monitor():
             
             stats_text = "\n".join(items_stats) if items_stats else "Еще не найдено"
             
+            # Статус каналов
             channels_status = []
             for channel_id, channel_name in CHANNEL_NAMES.items():
                 last_id = last_processed_ids.get(channel_id, 'Не обработано')
                 active = "🟢" if cycle_active_flags.get(channel_id, True) else "⏸️"
-                channels_status.append(f"{channel_name}: {last_id} {active}")
+                counter = check_counters.get(channel_id, 0)
+                channels_status.append(f"{channel_name}: {last_id} (проверок: {counter}) {active}")
             
             status_msg = (
                 f"📊 <b>Авто-статус бота (6ч)</b>\n\n"
                 f"⏰ Время работы: {uptime_hours:.1f} часов\n"
                 f"📢 Канал: {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}\n"
                 f"🔄 Запросов к Discord: {discord_request_count}\n"
-                f"📡 Циклы: {'/'.join(['🟢' if v else '⏸️' for v in cycle_active_flags.values()])}\n\n"
+                f"📡 Циклы: Семена:{'🟢' if cycle_active_flags.get(SEEDS_CHANNEL_ID, True) else '⏸️'} "
+                f"Яйца:{'🟢' if cycle_active_flags.get(EGGS_CHANNEL_ID, True) else '⏸️'} "
+                f"Пасс-шоп:{'🟢' if cycle_active_flags.get(PASS_SHOP_CHANNEL_ID, True) else '⏸️'}\n\n"
                 f"🎯 <b>Найдено предметов:</b>\n{stats_text}\n\n"
                 f"📝 <b>Состояние каналов:</b>\n" + "\n".join(channels_status)
             )
@@ -565,16 +592,31 @@ def home():
     uptime = datetime.now() - bot_start_time
     uptime_str = str(uptime).split('.')[0]
     
+    # Статистика находок
     found_items = []
     for item_name, count in found_items_count.items():
         if count > 0:
             item = TARGET_ITEMS[item_name]
             found_items.append(f"{item['emoji']} {item['display_name']}: {count}")
     
+    # Статус циклов
     cycles_status = []
     for channel_id, channel_name in CHANNEL_NAMES.items():
         active = "🟢 Активен" if cycle_active_flags.get(channel_id, True) else "⏸️ Прерван"
-        cycles_status.append(f"{channel_name}: {active}")
+        counter = check_counters.get(channel_id, 0)
+        cycles_status.append(f"{channel_name}: {active} (проверок: {counter})")
+    
+    # Список отслеживаемых предметов
+    tracked_items = []
+    for item in TARGET_ITEMS.values():
+        channels_str = ""
+        if SEEDS_CHANNEL_ID in item['channels']:
+            channels_str += "🌱 "
+        if EGGS_CHANNEL_ID in item['channels']:
+            channels_str += "🥚 "
+        if PASS_SHOP_CHANNEL_ID in item['channels']:
+            channels_str += "🎫 "
+        tracked_items.append(f"{item['emoji']} {item['display_name']} → {channels_str}")
     
     return f"""
     <html>
@@ -595,6 +637,8 @@ def home():
                 text-decoration: none; 
                 border-radius: 5px;
             }}
+            .button-disable {{ background: #e74c3c; }}
+            .button-enable {{ background: #2ecc71; }}
         </style>
     </head>
     <body>
@@ -616,14 +660,19 @@ def home():
         
         <div class="card">
             <h2>🎯 Управление</h2>
-            <a href="/enable" class="button">✅ Включить канал</a>
-            <a href="/disable" class="button">⏸️ Выключить канал</a>
+            <a href="/enable" class="button button-enable">✅ Включить канал</a>
+            <a href="/disable" class="button button-disable">⏸️ Выключить канал</a>
             <a href="/status" class="button">📊 Статус</a>
             <a href="/health" class="button">❤️ Здоровье</a>
         </div>
         
         <div class="card">
-            <h2>📡 Расписание проверок</h2>
+            <h2>📡 Отслеживаемые предметы (6 шт)</h2>
+            <ul>{"".join([f'<li>{item}</li>' for item in tracked_items])}</ul>
+        </div>
+        
+        <div class="card">
+            <h2>🕐 Расписание проверок</h2>
             <ul>
                 <li><strong>🌱 Семена (5 мин цикл):</strong> 20с, 40с, 1м (3 проверки)</li>
                 <li><strong>🥚 Яйца (30 мин цикл):</strong> 30с, 1м, 2м, 5м, 10м (5 проверок)</li>
@@ -638,7 +687,7 @@ def home():
         
         <div class="card">
             <h2>🧠 Логика работы</h2>
-            <p><strong>✅ Нашли сообщение от Kiro → прекращаем проверки в этом цикле</strong></p>
+            <p><strong>✅ Нашли сообщение от Kiro → прекращаем проверки ДО СЛЕДУЮЩЕГО ЦИКЛА</strong></p>
             <p><strong>✅ Нашли отслеживаемые предметы → отправляем стикер в канал</strong></p>
             <p><strong>✅ Не нашли Kiro → продолжаем по расписанию</strong></p>
             <p><strong>🛡️ Защита от дублей: запоминаем найденное в цикле</strong></p>
@@ -678,7 +727,8 @@ def status_page():
     for channel_id, channel_name in CHANNEL_NAMES.items():
         last_id = last_processed_ids.get(channel_id, 'Не обработано')
         active = "🟢 Активен" if cycle_active_flags.get(channel_id, True) else "⏸️ Прерван"
-        channels_info.append(f"{channel_name}: {last_id} ({active})")
+        counter = check_counters.get(channel_id, 0)
+        channels_info.append(f"{channel_name}: {last_id} (проверок: {counter}) - {active}")
     
     return f"""
     <html>
@@ -709,19 +759,24 @@ def health_check():
         'discord_requests': discord_request_count,
         'channel_enabled': channel_enabled,
         'active_cycles': sum(1 for v in cycle_active_flags.values() if v),
-        'found_items_total': sum(found_items_count.values())
+        'found_items_total': sum(found_items_count.values()),
+        'tracked_items_count': len(TARGET_ITEMS)
     })
 
 # ==================== ЗАПУСК ====================
 if __name__ == '__main__':
     logger.info("=" * 60)
-    logger.info("🚀 ЗАПУСК УМНОГО МОНИТОРИНГА С ПРЕРЫВАНИЕМ ЦИКЛОВ")
+    logger.info("🚀 ЗАПУСК УМНОГО МОНИТОРИНГА С ПОЛНЫМ ОТКЛЮЧЕНИЕМ ЦИКЛОВ")
     logger.info("=" * 60)
-    logger.info("🎯 Логика: Нашли Kiro → прекращаем цикл")
+    logger.info("🎯 Логика: Нашли Kiro → прекращаем цикл до следующего обновления")
     logger.info("📅 Расписание:")
     logger.info("  🌱 Семена: 20с, 40с, 1м (3 проверки)")
     logger.info("  🥚 Яйца: 30с, 1м, 2м, 5м, 10м (5 проверок)")
     logger.info("  🎫 Пасс-шоп: 40с, 1м10с (2 проверки)")
+    logger.info("📦 Отслеживаю 6 предметов:")
+    logger.info("  🌱 Семена: 🍅 Tomato, 🐙 Octobloom, 🦓 Zebrazinkle, 🌿 Peppermint Vine")
+    logger.info("  🥚 Яйца: 💎 Gem Egg")
+    logger.info("  🎫 Пасс-шоп: 🍯 Pollen Cone")
     logger.info("🛡️ Защита Discord: 1 запрос/5 секунд")
     logger.info("💾 Сохранение состояния: ВКЛЮЧЕНО")
     logger.info("=" * 60)
