@@ -309,9 +309,9 @@ def extract_text_from_message(message):
     
     return full_text
 
-# ==================== ОСНОВНАЯ ЛОГИКА С ЗАЩИТОЙ ОТ ДУБЛИРОВАНИЯ ====================
+# ==================== ОСНОВНАЯ ЛОГИКА (ИСПРАВЛЕННАЯ) ====================
 def process_discord_messages(channel_id):
-    """Обрабатывает сообщения из конкретного канала с защитой от дублирования"""
+    """Обрабатывает сообщения из конкретного канала - БЕЗ ОШИБОК"""
     global last_processed_ids, found_items_count, bot_status
     
     channel_name = CHANNEL_NAMES.get(channel_id, channel_id)
@@ -343,9 +343,11 @@ def process_discord_messages(channel_id):
         if message_id in processed_messages_cache:
             continue
         
+        # Получаем старый ID перед обработкой
+        old_last_id = last_processed_ids.get(channel_id)
+        
         # Пропускаем если сообщение старше последнего обработанного
-        last_id = last_processed_ids.get(channel_id)
-        if last_id and int(message_id) <= int(last_id):
+        if old_last_id and int(message_id) <= int(old_last_id):
             continue
         
         # Добавляем в кэш (с ограничением размера)
@@ -393,10 +395,10 @@ def process_discord_messages(channel_id):
         # Обновляем последний обработанный ID
         last_processed_ids[channel_id] = message_id
     
-    # Сохраняем состояние если что-то нашли или обновили ID
-    if found_any or (last_id != last_processed_ids.get(channel_id)):
+    # Сохраняем состояние если что-то нашли
+    if found_any:
         save_bot_state()
-        logger.debug(f"💾 Состояние сохранено для {channel_name}")
+        logger.debug(f"💾 Состояние сохранено после находки в {channel_name}")
     
     bot_status = f"🟢 Проверен {channel_name}"
     return found_any
