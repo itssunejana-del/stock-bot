@@ -1,4 +1,4 @@
-from flask import Flask, request
+from flask import Flask, request, jsonify
 import requests
 import os
 import time
@@ -40,7 +40,6 @@ CRITICAL_VARS = {
 missing_vars = [name for name, value in CRITICAL_VARS.items() if not value]
 if missing_vars:
     logger.error(f"❌ КРИТИЧЕСКАЯ ОШИБКА: Отсутствуют переменные окружения: {', '.join(missing_vars)}")
-    # Не выходим, но логируем ошибку. Бот попытается работать с тем, что есть.
 
 # ==================== ОТСЛЕЖИВАЕМЫЕ ПРЕДМЕТЫ ====================
 TARGET_SEEDS = {
@@ -83,24 +82,18 @@ TARGET_SEEDS = {
 }
 
 # ==================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ И СОСТОЯНИЕ ====================
-# Для хранения последних обработанных ID (ключ: channel_id, значение: message_id)
 last_processed_ids = {}
-# Файл для сохранения состояния между перезапусками
 STATE_FILE = 'bot_state.json'
-# Кэш для предотвращения повторной обработки одних и тех же сообщений в течение сессии
 processed_messages_cache = set()
-# Кэш для предотвращения отправки одинаковых стикеров в течение одного цикла обновления
 sent_stickers_cache = {}
-# Общая статистика
 bot_start_time = datetime.now()
 bot_status = "🟢 Инициализация"
-channel_enabled = True  # Флаг включения/выключения отправки в Telegram-канал
+channel_enabled = True
 
 # ==================== РАСПИСАНИЕ ЗАПРОСОВ ====================
-# Ключ: ID канала Discord, Значение: список кортежей (минута, секунда) относительно начала цикла
 REQUEST_SCHEDULE = {}
 CHANNEL_NAMES = {}
-CHANNEL_CYCLE_MINUTES = {}  # Длина цикла обновления для канала (5 или 30 минут)
+CHANNEL_CYCLE_MINUTES = {}
 
 if SEEDS_CHANNEL_ID:
     REQUEST_SCHEDULE[SEEDS_CHANNEL_ID] = [(0, 20), (0, 40), (1, 0), (2, 0), (3, 0)]
@@ -139,7 +132,6 @@ def load_bot_state():
             with open(STATE_FILE, 'r') as f:
                 state_data = json.load(f)
                 loaded_ids = state_data.get('last_processed_ids', {})
-                # Обновляем только для каналов, которые у нас есть в конфигурации
                 for ch_id in REQUEST_SCHEDULE:
                     if ch_id in loaded_ids:
                         last_processed_ids[ch_id] = loaded_ids[ch_id]
@@ -148,9 +140,10 @@ def load_bot_state():
             logger.info("📂 Файл состояния не найден. Начинаем с чистого листа.")
     except Exception as e:
         logger.error(f"❌ Ошибка загрузки состояния: {e}")
+
 # ==================== СИСТЕМА СОХРАНЕНИЯ ОТПРАВЛЕННЫХ СТИКЕРОВ ====================
 STICKERS_STATE_FILE = 'sent_stickers_state.json'
-sent_stickers_state = {}  # Формат: {"channel_id_itemname_hourcycle": true}
+sent_stickers_state = {}
 
 def load_stickers_state():
     """Загружает историю отправленных стикеров из файла."""
@@ -187,7 +180,7 @@ def mark_sticker_sent_in_cycle(channel_id, item_name):
     save_stickers_state()
     logger.debug(f"📝 Отмечен отправленный стикер: {item_name} в цикле {cycle_key}")
 
-# ==================== ФУНКЦИИ ДЛЯ TELEGRAM ====================
+# ==================== TELEGRAM ФУНКЦИИ ====================
 def send_telegram_message(chat_id, text, parse_mode="HTML", disable_notification=False):
     """Универсальная функция отправки сообщения в Telegram."""
     if not TELEGRAM_TOKEN or not chat_id:
@@ -247,7 +240,6 @@ def send_to_channel(sticker_id=None, text=None):
     """Отправляет стикер или сообщение в основной Telegram-канал с защитой от флуда."""
     if not channel_enabled or not TELEGRAM_CHANNEL_ID:
         return False
-    # Защита от слишком частых сообщений (минимум 2 секунды между отправками)
     if not hasattr(send_to_channel, 'last_send_time'):
         send_to_channel.last_send_time = 0
     current_time = time.time()
@@ -268,7 +260,7 @@ def send_to_bot(text, disable_notification=False):
         return False
     return send_telegram_message(TELEGRAM_BOT_CHAT_ID, text, disable_notification=disable_notification)
 
-# ==================== ФУНКЦИИ ДЛЯ DISCORD API ====================
+# ==================== DISCORD API ====================
 def fetch_discord_messages(channel_id, limit=3):
     """Безопасно получает сообщения из канала Discord с обработкой лимитов."""
     if not DISCORD_TOKEN or not channel_id:
@@ -276,11 +268,9 @@ def fetch_discord_messages(channel_id, limit=3):
     try:
         url = f"https://discord.com/api/v10/channels/{channel_id}/messages?limit={limit}"
         headers = {"Authorization": f"Bot {DISCORD_TOKEN}"}
-        # Увеличиваем таймаут для стабильности
         response = requests.get(url, headers=headers, timeout=20)
         if response.status_code == 200:
             messages = response.json()
-            # Фильтруем сообщения, оставляя только от Kiro
             filtered_messages = [msg for msg in messages if is_message_from_kiro(msg)]
             if filtered_messages:
                 logger.debug(f"📨 Получено {len(filtered_messages)} сообщений от Kiro из канала {CHANNEL_NAMES.get(channel_id, channel_id)}.")
@@ -306,18 +296,15 @@ def is_message_from_kiro(message_data):
     author = message_data.get('author', {})
     username = author.get('username', '').lower()
     is_bot = author.get('bot', False)
-    # Ищем "kiro" в имени пользователя или считаем всех ботов Kiro, если других ботов нет
     return ('kiro' in username) or (is_bot and 'kiro' in username)
 
 def clean_discord_text(text):
     """Очищает текст от Discord-форматирования для читаемого отображения в Telegram."""
     if not text:
         return ""
-    # Удаляем форматы типа <:name:id> и <t:timestamp:R>
     text = re.sub(r'<[:@#!]?[a-zA-Z0-9_]+:(\d+)>', '', text)
     text = re.sub(r'<t:\d+:[tTdDfFR]>', '', text)
-    text = re.sub(r'[*_~`|]', '', text)  # Удаляем markdown
-    # Убираем множественные переносы строк
+    text = re.sub(r'[*_~`|]', '', text)
     lines = [line.strip() for line in text.split('\n') if line.strip()]
     return '\n'.join(lines)
 
@@ -334,6 +321,19 @@ def extract_text_from_message(message_data):
     return full_text.lower()
 
 # ==================== ОСНОВНАЯ ЛОГИКА ОБРАБОТКИ ====================
+def get_current_cycle_key(channel_id):
+    """Генерирует уникальный ключ для каждого цикла обновления в сутках."""
+    now = datetime.now()
+    cycle_length = CHANNEL_CYCLE_MINUTES.get(channel_id, 5)
+    
+    # Вычисляем номер цикла с ПОЛНОЧИ
+    total_minutes_since_midnight = now.hour * 60 + now.minute
+    cycle_number = total_minutes_since_midnight // cycle_length
+    
+    # Уникальный ключ: дата_номер_цикла_канал
+    date_str = now.strftime('%Y%m%d')
+    return f"{date_str}_{cycle_number:04d}_{channel_id}"
+
 def process_discord_message(message_data, channel_id):
     """Обрабатывает одно сообщение от Kiro: проверяет предметы, шлет уведомления."""
     global last_processed_ids, sent_stickers_cache, bot_status
@@ -365,42 +365,38 @@ def process_discord_message(message_data, channel_id):
                     found_items.append(seed_config)
                     found_seed_names.append(seed_name)
                     logger.info(f"🎯 Найден {seed_config['emoji']} {seed_config['display_name']} в {channel_name}!")
-                    break  # Не ищем другие ключевые слова для этого семени
+                    break
 
-       # 4. ОБРАБОТКА НАЙДЕННЫХ ПРЕДМЕТОВ
-sticker_sent_in_this_message = False
-if found_items:
-    # Определяем уникальный ключ для кэша стикеров в этом цикле обновления
-    current_cycle_key = get_current_cycle_key(channel_id)
+        # 4. ОБРАБОТКА НАЙДЕННЫХ ПРЕДМЕТОВ
+        sticker_sent_in_this_message = False
+        if found_items:
+            current_cycle_key = get_current_cycle_key(channel_id)
 
-    for seed_config in found_items:
-        item_name = seed_config['display_name']
-        cache_key = f"{current_cycle_key}_{item_name}"
-        
-        # ПРОВЕРКА 1: Не отправлен ли в текущей сессии (память)
-        # ПРОВЕРКА 2: Не отправлен ли до перезапуска (файл)
-        if (cache_key not in sent_stickers_cache and 
-            not was_sticker_sent_in_cycle(channel_id, item_name)):
-            
-            if send_to_channel(sticker_id=seed_config['sticker_id']):
-                # Сохраняем в ДВА места:
-                sent_stickers_cache[cache_key] = True  # Память (быстрый доступ)
-                mark_sticker_sent_in_cycle(channel_id, item_name)  # Файл (переживает перезапуск)
+            for seed_config in found_items:
+                item_name = seed_config['display_name']
+                cache_key = f"{current_cycle_key}_{item_name}"
                 
-                sticker_sent_in_this_message = True
-                # Уведомляем в личку о отправке стикера
-                send_to_bot(f"✅ Стикер {seed_config['emoji']} отправлен в канал из {channel_name}.", disable_notification=True)
-                logger.info(f"🎯 Стикер {seed_config['emoji']} {item_name} отправлен и запомнен.")
-            else:
-                logger.error(f"❌ Не удалось отправить стикер {seed_config['emoji']}.")
-        else:
-            logger.debug(f"⏭️ Стикер {seed_config['emoji']} {item_name} уже был отправлен в этом цикле.")
+                # ПРОВЕРКА 1: Не отправлен ли в текущей сессии (память)
+                # ПРОВЕРКА 2: Не отправлен ли до перезапуска (файл)
+                if (cache_key not in sent_stickers_cache and 
+                    not was_sticker_sent_in_cycle(channel_id, item_name)):
+                    
+                    if send_to_channel(sticker_id=seed_config['sticker_id']):
+                        # Сохраняем в ДВА места:
+                        sent_stickers_cache[cache_key] = True  # Память (быстрый доступ)
+                        mark_sticker_sent_in_cycle(channel_id, item_name)  # Файл (переживает перезапуск)
+                        
+                        sticker_sent_in_this_message = True
+                        send_to_bot(f"✅ Стикер {seed_config['emoji']} отправлен в канал из {channel_name}.", disable_notification=True)
+                        logger.info(f"🎯 Стикер {seed_config['emoji']} {item_name} отправлен и запомнен.")
+                    else:
+                        logger.error(f"❌ Не удалось отправить стикер {seed_config['emoji']}.")
+                else:
+                    logger.debug(f"⏭️ Стикер {seed_config['emoji']} {item_name} уже был отправлен в этом цикле.")
 
         # 5. ОТПРАВКА ИНФОРМАЦИИ В ЛИЧКУ БОТА
-        # Отправляем всегда, если нашли отслеживаемые предметы, или если это первое сообщение после простоя
         if found_items or not last_id_for_channel:
             cleaned_content = clean_discord_text(message_data.get('content', ''))
-            # Форматируем красивое сообщение для Telegram
             items_text = ', '.join([f"{item['emoji']} {item['display_name']}" for item in found_items]) if found_items else "Нет отслеживаемых предметов"
             current_time = datetime.now().strftime('%H:%M:%S')
             message_for_bot = (
@@ -415,31 +411,14 @@ if found_items:
         # 6. ОБНОВЛЕНИЕ СОСТОЯНИЯ
         processed_messages_cache.add(message_id)
         last_processed_ids[channel_id] = message_id
-        save_bot_state()  # Сохраняем прогресс
+        save_bot_state()
 
         bot_status = f"🟢 Обработан {channel_name}"
-        return bool(found_items)  # Возвращаем True, если нашли хоть один предмет
+        return bool(found_items)
 
     except Exception as e:
         logger.error(f"💥 Критическая ошибка обработки сообщения в {channel_name}: {e}")
         return False
-
-def get_current_cycle_key(channel_id):
-    """Генерирует уникальный ключ для каждого цикла обновления в сутках."""
-    now = datetime.now()
-    cycle_length = CHANNEL_CYCLE_MINUTES.get(channel_id, 5)
-    
-    # Вычисляем номер цикла с ПОЛНОЧИ
-    total_minutes_since_midnight = now.hour * 60 + now.minute
-    cycle_number = total_minutes_since_midnight // cycle_length
-    
-    # Для отладки - можно залогировать
-    if now.minute % cycle_length == 0 and now.second < 5:
-        logger.debug(f"🔄 Цикл #{cycle_number} для {CHANNEL_NAMES.get(channel_id)} ({cycle_length} мин)")
-    
-    # Уникальный ключ: дата_номер_цикла_канал
-    date_str = now.strftime('%Y%m%d')
-    return f"{date_str}_{cycle_number:04d}_{channel_id}"  # 4 цифры для номера цикла
 
 def should_check_channel_now(channel_id):
     """Определяет, нужно ли прямо сейчас делать запрос к каналу согласно расписанию."""
@@ -450,11 +429,9 @@ def should_check_channel_now(channel_id):
     current_minute = now.minute
     current_second = now.second
 
-    # Определяем, в какой минуте цикла обновления мы находимся
     cycle_length = CHANNEL_CYCLE_MINUTES.get(channel_id, 5)
     minute_in_cycle = current_minute % cycle_length
 
-    # Проверяем, совпадает ли текущее время с одним из запланированных
     for scheduled_minute, scheduled_second in REQUEST_SCHEDULE[channel_id]:
         if minute_in_cycle == scheduled_minute and current_second == scheduled_second:
             return True
@@ -464,11 +441,10 @@ def should_check_channel_now(channel_id):
 def schedule_monitor():
     """Главный цикл мониторинга. Проверяет расписание и выполняет запросы к Discord."""
     logger.info("👁️‍🗨️ Монитор расписания запущен.")
-    load_bot_state()  # Загружаем сохраненное состояние при старте
-    load_stickers_state()  # Загружаем историю отправленных стикеров
+    load_bot_state()
+    load_stickers_state()
     send_to_bot("🚀 **Мониторинг Discord запущен по новому расписанию.**\nБот запомнил последние обработанные сообщения и не будет присылать старые.")
 
-    # Инициализация: делаем первый запрос, чтобы узнать последние сообщения, но не шлем уведомления
     for channel_id in REQUEST_SCHEDULE:
         channel_name = CHANNEL_NAMES.get(channel_id, channel_id)
         logger.info(f"🔍 Первичная проверка канала {channel_name}...")
@@ -478,14 +454,12 @@ def schedule_monitor():
             if channel_id not in last_processed_ids:
                 last_processed_ids[channel_id] = last_msg_id
                 logger.info(f"   Установлен last_processed_id для {channel_name}: {last_msg_id}")
-        time.sleep(1)  # Пауза между первичными запросами
+        time.sleep(1)
     save_bot_state()
 
-    # Основной цикл с фиксированным интервалом (проверяем расписание каждую секунду)
     while True:
         try:
             now_ts = time.time()
-            # Проверяем каждый канал
             for channel_id in REQUEST_SCHEDULE:
                 if should_check_channel_now(channel_id):
                     channel_name = CHANNEL_NAMES.get(channel_id, channel_id)
@@ -493,21 +467,16 @@ def schedule_monitor():
 
                     messages = fetch_discord_messages(channel_id)
                     if messages:
-                        # Обрабатываем сообщения в порядке от новых к старым
                         for msg in messages:
                             process_discord_message(msg, channel_id)
-                    # Делаем небольшую паузу после запроса, даже если сообщений нет
                     time.sleep(0.5)
 
-            # Очистка кэшей раз в 10 минут для предотвращения утечек памяти
-            if int(time.time()) % 600 == 0:  # Каждые 600 секунд
+            if int(time.time()) % 600 == 0:
                 old_cache_size = len(processed_messages_cache)
-                # Оставляем только последние 200 записей
                 if old_cache_size > 200:
                     processed_messages_cache.clear()
                     logger.debug(f"🧹 Очищен кэш обработанных сообщений. Было: {old_cache_size}")
 
-            # Короткая пауза в конце итерации цикла
             time.sleep(0.5)
 
         except Exception as e:
@@ -534,7 +503,7 @@ def telegram_command_poller():
                 logger.warning(f"⚠️ Неудачный запрос к Telegram API: {resp.status_code}")
                 time.sleep(5)
         except requests.exceptions.Timeout:
-            continue  # Таймаут - это нормально для long polling
+            continue
         except Exception as e:
             logger.error(f"❌ Ошибка в поллере Telegram: {e}")
             time.sleep(10)
@@ -591,7 +560,7 @@ def send_status(chat_id):
     )
     send_telegram_message(chat_id, status_msg)
 
-# ==================== ВЕБ-ИНТЕРФЕЙС (Flask маршруты) ====================
+# ==================== ВЕБ-ИНТЕРФЕЙС ====================
 @app.route('/')
 def home():
     """Главная страница веб-интерфейса."""
@@ -635,12 +604,9 @@ if __name__ == '__main__':
         schedule_str = ', '.join([f"{m}м{s}с" for m, s in REQUEST_SCHEDULE[ch_id]])
         logger.info(f"   • {ch_name}: {schedule_str}")
 
-    # Запускаем фоновые потоки
     threads = []
-    # Поток мониторинга по расписанию
     monitor_thread = threading.Thread(target=schedule_monitor, name='ScheduleMonitor', daemon=True)
     threads.append(monitor_thread)
-    # Поток обработки команд Telegram
     telegram_thread = threading.Thread(target=telegram_command_poller, name='TelegramPoller', daemon=True)
     threads.append(telegram_thread)
 
@@ -648,7 +614,6 @@ if __name__ == '__main__':
         t.start()
         logger.info(f"✅ Запущен поток: {t.name}")
 
-    # Запускаем Flask-сервер
     port = int(os.environ.get('PORT', 10000))
     logger.info(f"🌐 Веб-сервер запускается на порту {port}")
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
