@@ -20,7 +20,7 @@ app = Flask(__name__)
 
 # ==================== КОНФИГУРАЦИЯ ====================
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-TELEGRAM_CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')
+TELEGRAM_CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')  # Замените на ID вашего канала с 2.4к подписчиков
 TELEGRAM_BOT_CHAT_ID = os.getenv('TELEGRAM_BOT_CHAT_ID')
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 SEEDS_CHANNEL_ID = os.getenv('SEEDS_CHANNEL_ID')
@@ -35,15 +35,8 @@ missing = [var for var in REQUIRED_VARS if not os.getenv(var)]
 if missing:
     logger.error(f"❌ Отсутствуют переменные: {missing}")
 
-# ==================== ОТСЛЕЖИВАЕМЫЕ ПРЕДМЕТЫ ====================
+# ==================== ОТСЛЕЖИВАЕМЫЕ ПРЕДМЕТЫ (БЕЗ TOMATO) ====================
 TARGET_ITEMS = {
-    'tomato': {
-        'keywords': ['tomato', 'томат', ':tomato'],
-        'sticker_id': "CAACAgIAAxkBAAEP-3lpOtdl3thyaZN8BfxTSAvD6kEkKgACf3sAAoEeWUgkKobs-st7ojYE",
-        'emoji': '🍅',
-        'display_name': 'Tomato',
-        'channels': [SEEDS_CHANNEL_ID]
-    },
     'octobloom': {
         'keywords': ['octobloom', 'октоблум', ':octobloom'],
         'sticker_id': "CAACAgIAAxkBAAEP1btpIXhIEvgVEK4c6ugJv1EgP7UY-wAChokAAtZpCElVMcRUgb_jdDYE",
@@ -130,7 +123,7 @@ def handle_telegram_command(chat_id, command, message=None):
             "🎮 <b>Добро пожаловать в мониторинг Kiro!</b>\n\n"
             "Я отслеживаю стоки от бота Kiro в Discord и присылаю уведомления.\n\n"
             "📱 <b>Вам в личные сообщения:</b> Уведомления о найденных предметах\n"
-            "📢 <b>В канал:</b> Стикеры при обнаружении\n"
+            f"📢 <b>В канал ({TELEGRAM_CHANNEL_ID}):</b> Стикеры при обнаружении\n"
             "🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n\n"
             f"🎯 <b>Отслеживаю:</b>\n"
             f"{seeds_list}\n\n"
@@ -682,7 +675,7 @@ def monitor_pass_shop():
             time.sleep(10)
 
 def self_pinger():
-    """Самопинг чтобы Render не останавливал сервис (из Ember бота)"""
+    """Самопинг чтобы Render не останавливал сервис (из Ember боте)"""
     global ping_count, last_ping_time
     
     logger.info("🏓 Запуск самопинга (каждые 8 минут)")
@@ -770,10 +763,22 @@ def home():
         status = "🟢 Активен" if last_cycle != current_cycle else "⏸️ Обработан"
         cycles_status.append(f"{channel_name}: {status} (цикл: {current_cycle})")
     
+    # Список отслеживаемых предметов
+    tracked_items = []
+    for item in TARGET_ITEMS.values():
+        channels_str = ""
+        if SEEDS_CHANNEL_ID in item['channels']:
+            channels_str += "🌱 "
+        if EGGS_CHANNEL_ID in item['channels']:
+            channels_str += "🥚 "
+        if PASS_SHOP_CHANNEL_ID in item['channels']:
+            channels_str += "🎫 "
+        tracked_items.append(f"{item['emoji']} {item['display_name']} → {channels_str}")
+    
     return f"""
     <html>
     <head>
-        <title>🌱 Мониторинг Kiro с управлением</title>
+        <title>🌱 Мониторинг Kiro (без Tomato)</title>
         <meta charset="utf-8">
         <style>
             body {{ font-family: Arial, sans-serif; margin: 40px; }}
@@ -791,7 +796,7 @@ def home():
         </style>
     </head>
     <body>
-        <h1>🌱 Мониторинг Kiro с управлением через Telegram</h1>
+        <h1>🌱 Мониторинг Kiro (без Tomato)</h1>
         
         <div class="card">
             <h2>📊 Статус системы</h2>
@@ -821,10 +826,15 @@ def home():
         </div>
         
         <div class="card">
+            <h2>🎯 Отслеживаемые предметы (5 шт)</h2>
+            <ul>{"".join([f'<li>{item}</li>' for item in tracked_items])}</ul>
+        </div>
+        
+        <div class="card">
             <h2>🎯 Стратегия мониторинга</h2>
-            <p><strong>🌱 Семена:</strong> Постоянно, каждые 30 секунд</p>
-            <p><strong>🥚 Яйца:</strong> По расписанию (00:30, 02:00, 05:00 в 00 и 30 минут)</p>
-            <p><strong>🎫 Пасс-шоп:</strong> По расписанию (:40, 1:10 каждые 5 минут)</p>
+            <p><strong>🌱 Семена:</strong> Постоянно, каждые 30 секунд (3 предмета)</p>
+            <p><strong>🥚 Яйца:</strong> По расписанию (00:30, 02:00, 05:00)</p>
+            <p><strong>🎫 Пасс-шоп:</strong> По расписанию (:40, 1:10)</p>
         </div>
         
         <div class="card">
@@ -866,15 +876,18 @@ def health_check():
 # ==================== ЗАПУСК ====================
 if __name__ == '__main__':
     logger.info("=" * 60)
-    logger.info("🚀 ЗАПУСК МОНИТОРИНГА KIRO (ОКОНЧАТЕЛЬНАЯ ВЕРСИЯ)")
+    logger.info("🚀 ЗАПУСК МОНИТОРИНГА KIRO (БЕЗ TOMATO)")
     logger.info("=" * 60)
+    logger.info("🎯 Отслеживаю 5 предметов:")
+    logger.info("   🌱 Octobloom, Zebrazinkle, Peppermint Vine")
+    logger.info("   🥚 Gem Egg")
+    logger.info("   🎫 Pollen Cone")
     logger.info("🌱 Семена: каждые 30 сек (мин. 25 сек между проверками)")
     logger.info("🥚 Яйца: по расписанию (00:30, 02:00, 05:00)")
     logger.info("🎫 Пасс-шоп: по расписанию (:40, 1:10)")
     logger.info("🏓 Самопинг: каждые 8 минут")
     logger.info("📊 Авто-статус: каждые 6 часов")
     logger.info("🎛️ Управление: Telegram команды")
-    logger.info("🛡️ Защита: блокировки + минимум интервалы")
     logger.info("=" * 60)
     
     # Запуск всех потоков
@@ -893,8 +906,15 @@ if __name__ == '__main__':
         time.sleep(1)
     
     # Стартовое сообщение в Telegram
+    seeds_list = "\n".join([f"{config['emoji']} {config['display_name']}" 
+                          for config in TARGET_ITEMS.values() if SEEDS_CHANNEL_ID in config['channels']])
+    
     startup_msg = (
-        "🚀 <b>МОНИТОРИНГ KIRO ЗАПУЩЕН (ОКОНЧАТЕЛЬНАЯ ВЕРСИЯ)</b>\n\n"
+        "🚀 <b>МОНИТОРИНГ KIRO ЗАПУЩЕН (БЕЗ TOMATO)</b>\n\n"
+        f"🎯 <b>Отслеживаю 5 предметов:</b>\n"
+        f"{seeds_list}\n"
+        f"💎 Gem Egg\n"
+        f"🍯 Pollen Cone\n\n"
         "🌱 <b>Семена:</b> Каждые 30 сек (мин. 25 сек между проверками)\n"
         "🥚 <b>Яйца:</b> По расписанию (00:30, 02:00, 05:00 в 00 и 30 минут)\n"
         "🎫 <b>Пасс-шоп:</b> По расписанию (:40, 1:10 каждые 5 минут)\n\n"
