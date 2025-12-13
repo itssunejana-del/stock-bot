@@ -113,6 +113,7 @@ telegram_offset = 0
 last_error = None
 
 STATE_FILE = 'bot_state.json'
+check_lock = threading.Lock()  # Блокировка для проверок
 
 # ==================== TELEGRAM КОМАНДЫ ====================
 def handle_telegram_command(chat_id, command, message=None):
@@ -213,6 +214,9 @@ def telegram_poller():
     
     # Ждем немного чтобы избежать конфликта при старте
     time.sleep(10)
+    
+    # Сбросим offset при старте, чтобы не было конфликта
+    telegram_offset = 0
     
     while True:
         try:
@@ -481,14 +485,21 @@ def should_check_channel_now(channel_id):
     if last_processed_cycles.get(channel_id) == current_cycle:
         return False
     
-    now = datetime.now()
-    
-    # Для семян: проверяем всегда (будет фильтр по циклу выше)
+    # Для семян: дополнительная защита - минимум 25 секунд между проверками
     if channel_id == SEEDS_CHANNEL_ID:
+        if not hasattr(should_check_channel_now, 'last_seeds_check'):
+            should_check_channel_now.last_seeds_check = 0
+        
+        current_time = time.time()
+        if current_time - should_check_channel_now.last_seeds_check < 25:
+            return False
+        
+        should_check_channel_now.last_seeds_check = current_time
         return True
     
     # Для яиц: проверяем только в 00 и 30 минут
     elif channel_id == EGGS_CHANNEL_ID:
+        now = datetime.now()
         if now.minute not in [0, 30]:
             return False
         
@@ -508,6 +519,7 @@ def should_check_channel_now(channel_id):
     
     # Для пасс-шопа: проверяем каждые 5 минут
     elif channel_id == PASS_SHOP_CHANNEL_ID:
+        now = datetime.now()
         minute_in_cycle = now.minute % 5
         second = now.second
         
@@ -625,7 +637,8 @@ def monitor_seeds():
     while True:
         try:
             if should_check_channel_now(SEEDS_CHANNEL_ID):
-                check_channel(SEEDS_CHANNEL_ID)
+                with check_lock:
+                    check_channel(SEEDS_CHANNEL_ID)
             
             # Ждем 30 секунд до следующей проверки
             time.sleep(30)
@@ -638,21 +651,11 @@ def monitor_eggs():
     """Мониторинг яиц (по расписанию)"""
     logger.info("🥚 Запуск мониторинга яиц (по расписанию)")
     
-    # Переменная для защиты от дублей
-    last_check_time = 0
-    
     while True:
         try:
-            current_time = time.time()
-            
-            # Защита от слишком частых проверок (минимум 10 секунд между проверками)
-            if current_time - last_check_time < 10:
-                time.sleep(1)
-                continue
-            
             if should_check_channel_now(EGGS_CHANNEL_ID):
-                last_check_time = current_time
-                check_channel(EGGS_CHANNEL_ID)
+                with check_lock:
+                    check_channel(EGGS_CHANNEL_ID)
             
             # Короткая пауза
             time.sleep(1)
@@ -665,21 +668,11 @@ def monitor_pass_shop():
     """Мониторинг пасс-шопа (по расписанию)"""
     logger.info("🎫 Запуск мониторинга пасс-шопа (по расписанию)")
     
-    # Переменная для защиты от дублей
-    last_check_time = 0
-    
     while True:
         try:
-            current_time = time.time()
-            
-            # Защита от слишком частых проверок (минимум 10 секунд между проверками)
-            if current_time - last_check_time < 10:
-                time.sleep(1)
-                continue
-            
             if should_check_channel_now(PASS_SHOP_CHANNEL_ID):
-                last_check_time = current_time
-                check_channel(PASS_SHOP_CHANNEL_ID)
+                with check_lock:
+                    check_channel(PASS_SHOP_CHANNEL_ID)
             
             # Короткая пауза
             time.sleep(1)
@@ -873,15 +866,15 @@ def health_check():
 # ==================== ЗАПУСК ====================
 if __name__ == '__main__':
     logger.info("=" * 60)
-    logger.info("🚀 ЗАПУСК МОНИТОРИНГА KIRO С УПРАВЛЕНИЕМ (ИСПРАВЛЕННЫЙ)")
+    logger.info("🚀 ЗАПУСК МОНИТОРИНГА KIRO (ОКОНЧАТЕЛЬНАЯ ВЕРСИЯ)")
     logger.info("=" * 60)
-    logger.info("🌱 Семена: постоянно, каждые 30 секунд")
+    logger.info("🌱 Семена: каждые 30 сек (мин. 25 сек между проверками)")
     logger.info("🥚 Яйца: по расписанию (00:30, 02:00, 05:00)")
     logger.info("🎫 Пасс-шоп: по расписанию (:40, 1:10)")
-    logger.info("🏓 Самопинг: каждые 8 минут (как Ember)")
+    logger.info("🏓 Самопинг: каждые 8 минут")
     logger.info("📊 Авто-статус: каждые 6 часов")
-    logger.info("🎛️ Управление: Telegram команды /start, /status, /enable, /disable")
-    logger.info("🛡️ Защита от дублей: усиленная (циклы + сообщения)")
+    logger.info("🎛️ Управление: Telegram команды")
+    logger.info("🛡️ Защита: блокировки + минимум интервалы")
     logger.info("=" * 60)
     
     # Запуск всех потоков
@@ -901,13 +894,13 @@ if __name__ == '__main__':
     
     # Стартовое сообщение в Telegram
     startup_msg = (
-        "🚀 <b>МОНИТОРИНГ KIRO ЗАПУЩЕН С УПРАВЛЕНИЕМ (ИСПРАВЛЕННЫЙ)</b>\n\n"
-        "🌱 <b>Семена:</b> Постоянно, каждые 30 секунд\n"
+        "🚀 <b>МОНИТОРИНГ KIRO ЗАПУЩЕН (ОКОНЧАТЕЛЬНАЯ ВЕРСИЯ)</b>\n\n"
+        "🌱 <b>Семена:</b> Каждые 30 сек (мин. 25 сек между проверками)\n"
         "🥚 <b>Яйца:</b> По расписанию (00:30, 02:00, 05:00 в 00 и 30 минут)\n"
         "🎫 <b>Пасс-шоп:</b> По расписанию (:40, 1:10 каждые 5 минут)\n\n"
         "🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
         "📊 <b>Авто-статус:</b> Каждые 6 часов\n"
-        "🛡️ <b>Защита от дублей:</b> Усиленная (циклы + сообщения)\n"
+        "🛡️ <b>Защита от дублей:</b> Блокировки + минимум интервалы\n"
         "💪 <b>Безопасно для Discord:</b> ~150 запросов в час\n\n"
         "🎛️ <b>Команды управления:</b>\n"
         "/start - Информация\n"
