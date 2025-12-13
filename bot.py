@@ -522,11 +522,16 @@ def should_check_channel_now(channel_id):
     return False
 
 def check_channel(channel_id):
-    """Проверяет один канал Discord"""
+    """Проверяет один канал Discord с защитой от дублей"""
     global last_processed_ids, last_processed_cycles, found_items_count, bot_status
     
     channel_name = CHANNEL_NAMES.get(channel_id, channel_id)
     current_cycle = get_current_cycle(channel_id)
+    
+    # ВАЖНО: Проверяем, не обрабатывали ли мы уже этот цикл
+    if last_processed_cycles.get(channel_id) == current_cycle:
+        logger.debug(f"⏭️ Пропускаем {channel_name} - уже обрабатывали цикл {current_cycle}")
+        return False
     
     # Получаем сообщения
     messages = safe_fetch_discord_messages(channel_id, limit=2)
@@ -535,6 +540,7 @@ def check_channel(channel_id):
         return False
     
     found_items_in_this_check = []
+    found_new_message = False  # Флаг, нашли ли новое сообщение
     
     for message in messages:
         message_id = message['id']
@@ -548,7 +554,8 @@ def check_channel(channel_id):
         if last_id and int(message_id) <= int(last_id):
             continue
         
-        # Нашли новое сообщение от Kiro!
+        # Нашли НОВОЕ сообщение от Kiro!
+        found_new_message = True
         processed_messages_cache.add(message_id)
         last_processed_ids[channel_id] = message_id
         
@@ -570,30 +577,41 @@ def check_channel(channel_id):
                         found_items_in_this_check.append((cycle_key, item_config))
                     break
         
-        # Обработка найденных предметов
-        if found_items_in_this_check:
-            logger.info(f"🎯 Найдены предметы в {channel_name}: {len(found_items_in_this_check)} шт")
-            
-            for cycle_key, item_config in found_items_in_this_check:
-                current_time_str = datetime.now().strftime('%H:%M:%S')
-                notification = f"✅ Найден {item_config['emoji']} {item_config['display_name']} в {current_time_str}"
-                
-                # Отправляем уведомление в личный чат
-                send_to_bot(notification, disable_notification=False)
-                
-                # Отправляем стикер в канал
-                if send_to_channel(sticker_id=item_config['sticker_id']):
-                    logger.info(f"✅ Стикер {item_config['emoji']} отправлен в канал")
-                else:
-                    logger.error(f"❌ Ошибка отправки стикера {item_config['emoji']}")
-            
-            # Отмечаем, что в этом цикле уже нашли Kiro
-            last_processed_cycles[channel_id] = current_cycle
-            bot_status = f"🟢 Найдены предметы в {channel_name}"
-            return True
+        # ВАЖНО: Прерываем цикл после первого нового сообщения
+        # чтобы не обрабатывать несколько сообщений за один раз
+        break
     
-    # Если дошли сюда и не нашли предметов, но нашли Kiro
-    # Отмечаем цикл как обработанный (Kiro был, но без наших предметов)
+    # Если не нашли новых сообщений - выходим
+    if not found_new_message:
+        return False
+    
+    # Обработка найденных предметов
+    if found_items_in_this_check:
+        logger.info(f"🎯 Найдены предметы в {channel_name}: {len(found_items_in_this_check)} шт")
+        
+        for cycle_key, item_config in found_items_in_this_check:
+            current_time_str = datetime.now().strftime('%H:%M:%S')
+            notification = f"✅ Найден {item_config['emoji']} {item_config['display_name']} в {current_time_str}"
+            
+            # Отправляем уведомление в личный чат
+            success = send_to_bot(notification, disable_notification=False)
+            if success:
+                logger.info(f"📱 Уведомление отправлено: {item_config['display_name']}")
+            else:
+                logger.error(f"❌ Не удалось отправить уведомление о {item_config['display_name']}")
+            
+            # Отправляем стикер в канал
+            if send_to_channel(sticker_id=item_config['sticker_id']):
+                logger.info(f"✅ Стикер {item_config['emoji']} отправлен в канал")
+            else:
+                logger.error(f"❌ Ошибка отправки стикера {item_config['emoji']}")
+        
+        # Отмечаем, что в этом цикле уже нашли Kiro
+        last_processed_cycles[channel_id] = current_cycle
+        bot_status = f"🟢 Найдены предметы в {channel_name}"
+        return True
+    
+    # Если нашли Kiro, но не нашли предметов
     last_processed_cycles[channel_id] = current_cycle
     logger.info(f"📭 Kiro в {channel_name} без нужных предметов")
     bot_status = f"🟢 Проверен {channel_name}"
@@ -620,9 +638,20 @@ def monitor_eggs():
     """Мониторинг яиц (по расписанию)"""
     logger.info("🥚 Запуск мониторинга яиц (по расписанию)")
     
+    # Переменная для защиты от дублей
+    last_check_time = 0
+    
     while True:
         try:
+            current_time = time.time()
+            
+            # Защита от слишком частых проверок (минимум 10 секунд между проверками)
+            if current_time - last_check_time < 10:
+                time.sleep(1)
+                continue
+            
             if should_check_channel_now(EGGS_CHANNEL_ID):
+                last_check_time = current_time
                 check_channel(EGGS_CHANNEL_ID)
             
             # Короткая пауза
@@ -636,9 +665,20 @@ def monitor_pass_shop():
     """Мониторинг пасс-шопа (по расписанию)"""
     logger.info("🎫 Запуск мониторинга пасс-шопа (по расписанию)")
     
+    # Переменная для защиты от дублей
+    last_check_time = 0
+    
     while True:
         try:
+            current_time = time.time()
+            
+            # Защита от слишком частых проверок (минимум 10 секунд между проверками)
+            if current_time - last_check_time < 10:
+                time.sleep(1)
+                continue
+            
             if should_check_channel_now(PASS_SHOP_CHANNEL_ID):
+                last_check_time = current_time
                 check_channel(PASS_SHOP_CHANNEL_ID)
             
             # Короткая пауза
@@ -833,7 +873,7 @@ def health_check():
 # ==================== ЗАПУСК ====================
 if __name__ == '__main__':
     logger.info("=" * 60)
-    logger.info("🚀 ЗАПУСК МОНИТОРИНГА KIRO С УПРАВЛЕНИЕМ")
+    logger.info("🚀 ЗАПУСК МОНИТОРИНГА KIRO С УПРАВЛЕНИЕМ (ИСПРАВЛЕННЫЙ)")
     logger.info("=" * 60)
     logger.info("🌱 Семена: постоянно, каждые 30 секунд")
     logger.info("🥚 Яйца: по расписанию (00:30, 02:00, 05:00)")
@@ -841,6 +881,7 @@ if __name__ == '__main__':
     logger.info("🏓 Самопинг: каждые 8 минут (как Ember)")
     logger.info("📊 Авто-статус: каждые 6 часов")
     logger.info("🎛️ Управление: Telegram команды /start, /status, /enable, /disable")
+    logger.info("🛡️ Защита от дублей: усиленная (циклы + сообщения)")
     logger.info("=" * 60)
     
     # Запуск всех потоков
@@ -860,12 +901,13 @@ if __name__ == '__main__':
     
     # Стартовое сообщение в Telegram
     startup_msg = (
-        "🚀 <b>МОНИТОРИНГ KIRO ЗАПУЩЕН С УПРАВЛЕНИЕМ</b>\n\n"
+        "🚀 <b>МОНИТОРИНГ KIRO ЗАПУЩЕН С УПРАВЛЕНИЕМ (ИСПРАВЛЕННЫЙ)</b>\n\n"
         "🌱 <b>Семена:</b> Постоянно, каждые 30 секунд\n"
         "🥚 <b>Яйца:</b> По расписанию (00:30, 02:00, 05:00 в 00 и 30 минут)\n"
         "🎫 <b>Пасс-шоп:</b> По расписанию (:40, 1:10 каждые 5 минут)\n\n"
         "🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
         "📊 <b>Авто-статус:</b> Каждые 6 часов\n"
+        "🛡️ <b>Защита от дублей:</b> Усиленная (циклы + сообщения)\n"
         "💪 <b>Безопасно для Discord:</b> ~150 запросов в час\n\n"
         "🎛️ <b>Команды управления:</b>\n"
         "/start - Информация\n"
