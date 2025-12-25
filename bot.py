@@ -20,23 +20,24 @@ app = Flask(__name__)
 
 # ==================== КОНФИГУРАЦИЯ ====================
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
-TELEGRAM_CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')  # Замените на ID вашего канала с 2.4к подписчиков
+TELEGRAM_CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')
 TELEGRAM_BOT_CHAT_ID = os.getenv('TELEGRAM_BOT_CHAT_ID')
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 SEEDS_CHANNEL_ID = os.getenv('SEEDS_CHANNEL_ID')
-EGGS_CHANNEL_ID = os.getenv('EGGS_CHANNEL_ID')
+EVENT_SHOP_CHANNEL_ID = os.getenv('EVENT_SHOP_CHANNEL_ID')
 PASS_SHOP_CHANNEL_ID = os.getenv('PASS_SHOP_CHANNEL_ID')
 RENDER_SERVICE_URL = os.getenv('RENDER_SERVICE_URL', 'https://stock-bot-cj4s.onrender.com')
 
 # Проверка переменных
 REQUIRED_VARS = ['TELEGRAM_TOKEN', 'TELEGRAM_CHANNEL_ID', 'TELEGRAM_BOT_CHAT_ID', 
-                 'DISCORD_TOKEN', 'SEEDS_CHANNEL_ID', 'EGGS_CHANNEL_ID', 'PASS_SHOP_CHANNEL_ID']
+                 'DISCORD_TOKEN', 'SEEDS_CHANNEL_ID', 'PASS_SHOP_CHANNEL_ID', 'EVENT_SHOP_CHANNEL_ID']
 missing = [var for var in REQUIRED_VARS if not os.getenv(var)]
 if missing:
     logger.error(f"❌ Отсутствуют переменные: {missing}")
 
-# ==================== ОТСЛЕЖИВАЕМЫЕ ПРЕДМЕТЫ (БЕЗ TOMATO) ====================
+# ==================== ОТСЛЕЖИВАЕМЫЕ ПРЕДМЕТЫ ====================
 TARGET_ITEMS = {
+    # 🌱 Семена (5 предметов)
     'octobloom': {
         'keywords': ['octobloom', 'октоблум', ':octobloom'],
         'sticker_id': "CAACAgIAAxkBAAEP1btpIXhIEvgVEK4c6ugJv1EgP7UY-wAChokAAtZpCElVMcRUgb_jdDYE",
@@ -58,13 +59,45 @@ TARGET_ITEMS = {
         'display_name': 'Peppermint Vine',
         'channels': [SEEDS_CHANNEL_ID]
     },
-    'gem_egg': {
-        'keywords': ['gem egg', 'gemegg', ':gemegg'],
-        'sticker_id': "CAACAgIAAxkBAAEP1b9pIXhSl-ElpsKgOEEY-8oOmJ1qnAACI4MAAq6w2EinW-vu8EV_RzYE",
-        'emoji': '💎',
-        'display_name': 'Gem Egg',
-        'channels': [EGGS_CHANNEL_ID]
+    'reindeer_root': {
+        'keywords': ['reindeer root', 'reindeerroot', ':reindeerroot', ':reindeer_root:'],
+        'sticker_id': "CAACAgIAAxkBAAEQFg1pTP0fk8xMmgJMrKkYlGJM19BzRgAC2JAAAjBHaErxJTej2DDgyTYE",
+        'emoji': '🦌',
+        'display_name': 'Reindeer Root',
+        'channels': [SEEDS_CHANNEL_ID]
     },
+    'spirit_sparkle': {
+        'keywords': ['spirit sparkle', 'spiritsparkle', ':spiritsparkle', ':spirit_sparkle:'],
+        'sticker_id': "CAACAgIAAxkBAAEQFgtpTP0V_TKkqaFomhKCyMVu4EyywwACK5EAAlJZaUqJSM6Pcx8QTDYE",
+        'emoji': '✨',
+        'display_name': 'Spirit Sparkle',
+        'channels': [SEEDS_CHANNEL_ID]
+    },
+    
+    # 🎪 Ивент-шоп (3 предмета)
+    'pet_shard_hyperhunger': {
+        'keywords': ['pet shard hyperhunger', 'petshardhyperhunger', ':petshardhyperhunger', ':pet_shard_hyperhunger:'],
+        'sticker_id': "CAACAgIAAxkBAAEP_x5pPne_dgEJCyeqeEmJnlqY4C-1MQAC_4cAAknV8ElLEA_N3-x7MjYE",
+        'emoji': '🍖',
+        'display_name': 'Pet Shard Hyperhunger',
+        'channels': [EVENT_SHOP_CHANNEL_ID]
+    },
+    'summer_kiwi': {
+        'keywords': ['summer kiwi', 'summerkiwi', ':summerkiwi'],
+        'sticker_id': "CAACAgIAAxkBAAEQFg9pTP0pDPHhwG3j2aVhbleBuea1MwACgIgAAn3naEpG0IHobd69wDYE",
+        'emoji': '🥝',
+        'display_name': 'Summer Kiwi',
+        'channels': [EVENT_SHOP_CHANNEL_ID]
+    },
+    'chamberstick': {
+        'keywords': ['chamberstick', ':chamberstick'],
+        'sticker_id': "CAACAgIAAxkBAAEQFhFpTP0vCqlVLKgO_BGk0DcHhNQyawAC-JgAAkjTaErsL4vVzCGbCDYE",
+        'emoji': '🕯️',
+        'display_name': 'Chamberstick',
+        'channels': [EVENT_SHOP_CHANNEL_ID]
+    },
+    
+    # 🎫 Пасс-шоп (1 предмет)
     'pollen_cone': {
         'keywords': ['pollen cone', 'pollencone', ':pollencone'],
         'sticker_id': "CAACAgIAAxkBAAEP-4hpOtmoKIOXpzx89yFx3StQK77KzQACQI8AAuZU2Emfi_MTLWoHDjYE",
@@ -76,21 +109,21 @@ TARGET_ITEMS = {
 
 CHANNEL_NAMES = {
     SEEDS_CHANNEL_ID: '🌱 Семена',
-    EGGS_CHANNEL_ID: '🥚 Яйца',
+    EVENT_SHOP_CHANNEL_ID: '🎪 Ивент-шоп',
     PASS_SHOP_CHANNEL_ID: '🎫 Пасс-шоп'
 }
 
 # ==================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ====================
 last_processed_ids = {
     SEEDS_CHANNEL_ID: None,
-    EGGS_CHANNEL_ID: None,
-    PASS_SHOP_CHANNEL_ID: None
+    PASS_SHOP_CHANNEL_ID: None,
+    EVENT_SHOP_CHANNEL_ID: None
 }
 
 last_processed_cycles = {
     SEEDS_CHANNEL_ID: None,
-    EGGS_CHANNEL_ID: None,
-    PASS_SHOP_CHANNEL_ID: None
+    PASS_SHOP_CHANNEL_ID: None,
+    EVENT_SHOP_CHANNEL_ID: None
 }
 
 processed_messages_cache = set()
@@ -106,11 +139,11 @@ telegram_offset = 0
 last_error = None
 
 STATE_FILE = 'bot_state.json'
-check_lock = threading.Lock()  # Блокировка для проверок
+check_lock = threading.Lock()
 
 # ==================== TELEGRAM КОМАНДЫ ====================
 def handle_telegram_command(chat_id, command, message=None):
-    """Обрабатывает команды Telegram (как в Ember боте)"""
+    """Обрабатывает команды Telegram"""
     global channel_enabled
     
     logger.info(f"🎯 Обрабатываю команду: {command} от {chat_id}")
@@ -118,6 +151,8 @@ def handle_telegram_command(chat_id, command, message=None):
     if command == '/start':
         seeds_list = "\n".join([f"{config['emoji']} {config['display_name']}" 
                               for config in TARGET_ITEMS.values() if SEEDS_CHANNEL_ID in config['channels']])
+        event_list = "\n".join([f"{config['emoji']} {config['display_name']}" 
+                              for config in TARGET_ITEMS.values() if EVENT_SHOP_CHANNEL_ID in config['channels']])
         
         welcome_text = (
             "🎮 <b>Добро пожаловать в мониторинг Kiro!</b>\n\n"
@@ -125,8 +160,10 @@ def handle_telegram_command(chat_id, command, message=None):
             "📱 <b>Вам в личные сообщения:</b> Уведомления о найденных предметах\n"
             f"📢 <b>В канал ({TELEGRAM_CHANNEL_ID}):</b> Стикеры при обнаружении\n"
             "🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n\n"
-            f"🎯 <b>Отслеживаю:</b>\n"
-            f"{seeds_list}\n\n"
+            f"🎯 <b>Отслеживаю 9 предметов:</b>\n"
+            f"{seeds_list}\n"
+            f"{event_list}\n"
+            f"🍯 Pollen Cone (пасс-шоп)\n\n"
             "🎛️ <b>Команды:</b>\n"
             "/start - Информация\n"
             "/status - Статус бота\n" 
@@ -137,7 +174,7 @@ def handle_telegram_command(chat_id, command, message=None):
         send_telegram_message(chat_id, welcome_text)
         
     elif command == '/help':
-        seeds_list = "\n".join([f"{config['emoji']} {config['display_name']}" 
+        items_list = "\n".join([f"{config['emoji']} {config['display_name']}" 
                               for name, config in TARGET_ITEMS.items()])
         
         help_text = (
@@ -148,8 +185,8 @@ def handle_telegram_command(chat_id, command, message=None):
             f"/enable - Включить уведомления в канал\n"
             f"/disable - Выключить уведомления в канал\n"
             f"/help - Показать это сообщение\n\n"
-            f"🎯 <b>Отслеживаю предметы:</b>\n"
-            f"{seeds_list}\n\n"
+            f"🎯 <b>Отслеживаю предметы (9 шт):</b>\n"
+            f"{items_list}\n\n"
             f"🔄 Бот автоматически отслеживает стоки от Kiro и присылает уведомления."
         )
         send_telegram_message(chat_id, help_text)
@@ -177,7 +214,7 @@ def send_bot_status(chat_id):
     
     last_ping_str = "Еще не было" if not last_ping_time else last_ping_time.strftime('%H:%M:%S')
     
-    seeds_stats = "\n".join([f"{config['emoji']} {config['display_name']}: {found_items_count[name]} раз" 
+    items_stats = "\n".join([f"{config['emoji']} {config['display_name']}: {found_items_count[name]} раз" 
                            for name, config in TARGET_ITEMS.items() if found_items_count[name] > 0])
     
     status_text = (
@@ -191,7 +228,7 @@ def send_bot_status(chat_id):
         f"💾 Запросов к Discord: {discord_request_count}\n"
         f"📝 В памяти: {len(processed_messages_cache)} сообщений\n\n"
         f"🎯 <b>Найдено предметов:</b>\n"
-        f"{seeds_stats if seeds_stats else 'Еще не найдено'}"
+        f"{items_stats if items_stats else 'Еще не найдено'}"
     )
     
     if last_error:
@@ -200,15 +237,12 @@ def send_bot_status(chat_id):
     send_telegram_message(chat_id, status_text)
 
 def telegram_poller():
-    """Опросщик Telegram команд (как в Ember боте)"""
+    """Опросщик Telegram команд"""
     global telegram_offset
     
     logger.info("🔍 Запускаю Telegram поллер...")
     
-    # Ждем немного чтобы избежать конфликта при старте
     time.sleep(10)
-    
-    # Сбросим offset при старте, чтобы не было конфликта
     telegram_offset = 0
     
     while True:
@@ -239,7 +273,6 @@ def telegram_poller():
                             if text.startswith('/'):
                                 handle_telegram_command(chat_id, text)
                 
-                # Увеличиваем паузу между запросами
                 time.sleep(5)
                 
             elif response.status_code == 409:
@@ -327,7 +360,6 @@ def send_to_channel(sticker_id=None, text=None):
         logger.debug("⏸️ Канал отключен")
         return False
     
-    # Защита от спама (3 секунды между сообщениями)
     if not hasattr(send_to_channel, 'last_send_time'):
         send_to_channel.last_send_time = 0
     
@@ -364,7 +396,6 @@ def safe_fetch_discord_messages(channel_id, limit=2, max_retries=2):
     
     for attempt in range(max_retries):
         try:
-            # Защита от частых запросов (8 секунд)
             current_time = time.time()
             time_since_last = current_time - last_discord_request
             
@@ -451,21 +482,19 @@ def get_current_cycle(channel_id):
     now = datetime.now()
     
     if channel_id == SEEDS_CHANNEL_ID:
-        # 5-минутные циклы для семян (00, 05, 10, ...)
         cycle_minute = (now.minute // 5) * 5
         return f"{now.hour:02d}{cycle_minute:02d}"
     
-    elif channel_id == EGGS_CHANNEL_ID:
-        # 30-минутные циклы для яиц (00, 30)
+    elif channel_id == PASS_SHOP_CHANNEL_ID:
+        cycle_minute = (now.minute // 5) * 5
+        return f"{now.hour:02d}{cycle_minute:02d}"
+    
+    elif channel_id == EVENT_SHOP_CHANNEL_ID:
+        # 30-минутные циклы для ивент-шопа (00, 30)
         if now.minute < 30:
             cycle_minute = 0
         else:
             cycle_minute = 30
-        return f"{now.hour:02d}{cycle_minute:02d}"
-    
-    elif channel_id == PASS_SHOP_CHANNEL_ID:
-        # 5-минутные циклы для пасс-шопа (00, 05, 10, ...)
-        cycle_minute = (now.minute // 5) * 5
         return f"{now.hour:02d}{cycle_minute:02d}"
     
     return None
@@ -490,22 +519,24 @@ def should_check_channel_now(channel_id):
         should_check_channel_now.last_seeds_check = current_time
         return True
     
-    # Для яиц: проверяем только в 00 и 30 минут
-    elif channel_id == EGGS_CHANNEL_ID:
+    # Для ивент-шопа: проверяем только в 00 и 30 минут (30-минутные циклы)
+    elif channel_id == EVENT_SHOP_CHANNEL_ID:
         now = datetime.now()
         if now.minute not in [0, 30]:
             return False
         
-        # Внутри 30-минутного цикла проверяем 3 раза
+        # Внутри 30-минутного цикла проверяем 4 раза (как вы просили)
         minute_in_cycle = now.minute % 30  # 0 или 30, но после % будет 0
         second = now.second
         
-        # Проверки через 30 сек, 2 мин и 5 мин после начала цикла
-        if minute_in_cycle == 0 and second == 30:  # 00:30 или 30:30
+        # Проверки через 30 сек, 50 сек, 1 мин 15 сек и 5 мин 30 сек
+        if minute_in_cycle == 0 and second == 30:   # 00:30 или 30:30
             return True
-        if minute_in_cycle == 2 and second == 0:   # 02:00 или 32:00
+        if minute_in_cycle == 0 and second == 50:   # 00:50 или 30:50
             return True
-        if minute_in_cycle == 5 and second == 0:   # 05:00 или 35:00
+        if minute_in_cycle == 1 and second == 15:   # 01:15 или 31:15
+            return True
+        if minute_in_cycle == 5 and second == 30:   # 05:30 или 35:30
             return True
         
         return False
@@ -545,7 +576,7 @@ def check_channel(channel_id):
         return False
     
     found_items_in_this_check = []
-    found_new_message = False  # Флаг, нашли ли новое сообщение
+    found_new_message = False
     
     for message in messages:
         message_id = message['id']
@@ -564,10 +595,8 @@ def check_channel(channel_id):
         processed_messages_cache.add(message_id)
         last_processed_ids[channel_id] = message_id
         
-        # Извлекаем текст
         text = extract_text_from_message(message)
         
-        # Ищем предметы для этого канала
         for item_name, item_config in TARGET_ITEMS.items():
             if channel_id not in item_config['channels']:
                 continue
@@ -582,15 +611,11 @@ def check_channel(channel_id):
                         found_items_in_this_check.append((cycle_key, item_config))
                     break
         
-        # ВАЖНО: Прерываем цикл после первого нового сообщения
-        # чтобы не обрабатывать несколько сообщений за один раз
         break
     
-    # Если не нашли новых сообщений - выходим
     if not found_new_message:
         return False
     
-    # Обработка найденных предметов
     if found_items_in_this_check:
         logger.info(f"🎯 Найдены предметы в {channel_name}: {len(found_items_in_this_check)} шт")
         
@@ -598,25 +623,21 @@ def check_channel(channel_id):
             current_time_str = datetime.now().strftime('%H:%M:%S')
             notification = f"✅ Найден {item_config['emoji']} {item_config['display_name']} в {current_time_str}"
             
-            # Отправляем уведомление в личный чат
             success = send_to_bot(notification, disable_notification=False)
             if success:
                 logger.info(f"📱 Уведомление отправлено: {item_config['display_name']}")
             else:
                 logger.error(f"❌ Не удалось отправить уведомление о {item_config['display_name']}")
             
-            # Отправляем стикер в канал
             if send_to_channel(sticker_id=item_config['sticker_id']):
                 logger.info(f"✅ Стикер {item_config['emoji']} отправлен в канал")
             else:
                 logger.error(f"❌ Ошибка отправки стикера {item_config['emoji']}")
         
-        # Отмечаем, что в этом цикле уже нашли Kiro
         last_processed_cycles[channel_id] = current_cycle
         bot_status = f"🟢 Найдены предметы в {channel_name}"
         return True
     
-    # Если нашли Kiro, но не нашли предметов
     last_processed_cycles[channel_id] = current_cycle
     logger.info(f"📭 Kiro в {channel_name} без нужных предметов")
     bot_status = f"🟢 Проверен {channel_name}"
@@ -633,28 +654,26 @@ def monitor_seeds():
                 with check_lock:
                     check_channel(SEEDS_CHANNEL_ID)
             
-            # Ждем 30 секунд до следующей проверки
             time.sleep(30)
             
         except Exception as e:
             logger.error(f"💥 Ошибка в мониторинге семян: {e}")
             time.sleep(10)
 
-def monitor_eggs():
-    """Мониторинг яиц (по расписанию)"""
-    logger.info("🥚 Запуск мониторинга яиц (по расписанию)")
+def monitor_event_shop():
+    """Мониторинг ивент-шопа (30-минутные циклы с 4 проверками)"""
+    logger.info("🎪 Запуск мониторинга ивент-шопа (30-минутные циклы)")
     
     while True:
         try:
-            if should_check_channel_now(EGGS_CHANNEL_ID):
+            if should_check_channel_now(EVENT_SHOP_CHANNEL_ID):
                 with check_lock:
-                    check_channel(EGGS_CHANNEL_ID)
+                    check_channel(EVENT_SHOP_CHANNEL_ID)
             
-            # Короткая пауза
             time.sleep(1)
             
         except Exception as e:
-            logger.error(f"💥 Ошибка в мониторинге яиц: {e}")
+            logger.error(f"💥 Ошибка в мониторинге ивент-шопа: {e}")
             time.sleep(10)
 
 def monitor_pass_shop():
@@ -667,7 +686,6 @@ def monitor_pass_shop():
                 with check_lock:
                     check_channel(PASS_SHOP_CHANNEL_ID)
             
-            # Короткая пауза
             time.sleep(1)
             
         except Exception as e:
@@ -675,7 +693,7 @@ def monitor_pass_shop():
             time.sleep(10)
 
 def self_pinger():
-    """Самопинг чтобы Render не останавливал сервис (из Ember боте)"""
+    """Самопинг чтобы Render не останавливал сервис"""
     global ping_count, last_ping_time
     
     logger.info("🏓 Запуск самопинга (каждые 8 минут)")
@@ -697,7 +715,7 @@ def self_pinger():
             logger.error(f"❌ Ошибка самопинга: {e}")
         
         logger.info("💤 Ожидаю 8 минут до следующего самопинга...")
-        time.sleep(480)  # 8 минут
+        time.sleep(480)
 
 def health_monitor():
     """Отправляет статус каждые 6 часов"""
@@ -709,13 +727,12 @@ def health_monitor():
     
     while True:
         try:
-            time.sleep(6 * 60 * 60)  # 6 часов
+            time.sleep(6 * 60 * 60)
             
             report_count += 1
             uptime = datetime.now() - bot_start_time
             uptime_hours = uptime.total_seconds() / 3600
             
-            # Статистика находок
             items_stats = []
             for item_name, count in found_items_count.items():
                 if count > 0:
@@ -755,7 +772,6 @@ def home():
             item = TARGET_ITEMS[item_name]
             found_items.append(f"{item['emoji']} {item['display_name']}: {count}")
     
-    # Текущие циклы
     cycles_status = []
     for channel_id, channel_name in CHANNEL_NAMES.items():
         current_cycle = get_current_cycle(channel_id)
@@ -763,14 +779,13 @@ def home():
         status = "🟢 Активен" if last_cycle != current_cycle else "⏸️ Обработан"
         cycles_status.append(f"{channel_name}: {status} (цикл: {current_cycle})")
     
-    # Список отслеживаемых предметов
     tracked_items = []
     for item in TARGET_ITEMS.values():
         channels_str = ""
         if SEEDS_CHANNEL_ID in item['channels']:
             channels_str += "🌱 "
-        if EGGS_CHANNEL_ID in item['channels']:
-            channels_str += "🥚 "
+        if EVENT_SHOP_CHANNEL_ID in item['channels']:
+            channels_str += "🎪 "
         if PASS_SHOP_CHANNEL_ID in item['channels']:
             channels_str += "🎫 "
         tracked_items.append(f"{item['emoji']} {item['display_name']} → {channels_str}")
@@ -778,7 +793,7 @@ def home():
     return f"""
     <html>
     <head>
-        <title>🌱 Мониторинг Kiro (без Tomato)</title>
+        <title>🌱 Мониторинг Kiro 2.0 (9 предметов)</title>
         <meta charset="utf-8">
         <style>
             body {{ font-family: Arial, sans-serif; margin: 40px; }}
@@ -796,7 +811,7 @@ def home():
         </style>
     </head>
     <body>
-        <h1>🌱 Мониторинг Kiro (без Tomato)</h1>
+        <h1>🌱 Мониторинг Kiro 2.0 (9 предметов)</h1>
         
         <div class="card">
             <h2>📊 Статус системы</h2>
@@ -826,15 +841,15 @@ def home():
         </div>
         
         <div class="card">
-            <h2>🎯 Отслеживаемые предметы (5 шт)</h2>
+            <h2>🎯 Отслеживаемые предметы (9 шт)</h2>
             <ul>{"".join([f'<li>{item}</li>' for item in tracked_items])}</ul>
         </div>
         
         <div class="card">
             <h2>🎯 Стратегия мониторинга</h2>
-            <p><strong>🌱 Семена:</strong> Постоянно, каждые 30 секунд (3 предмета)</p>
-            <p><strong>🥚 Яйца:</strong> По расписанию (00:30, 02:00, 05:00)</p>
-            <p><strong>🎫 Пасс-шоп:</strong> По расписанию (:40, 1:10)</p>
+            <p><strong>🌱 Семена (5 предметов):</strong> Постоянно, каждые 30 секунд</p>
+            <p><strong>🎪 Ивент-шоп (3 предмета):</strong> 30-минутные циклы (:30, :50, 1:15, 5:30)</p>
+            <p><strong>🎫 Пасс-шоп (1 предмет):</strong> По расписанию (:40, 1:10)</p>
         </div>
         
         <div class="card">
@@ -876,24 +891,23 @@ def health_check():
 # ==================== ЗАПУСК ====================
 if __name__ == '__main__':
     logger.info("=" * 60)
-    logger.info("🚀 ЗАПУСК МОНИТОРИНГА KIRO (БЕЗ TOMATO)")
+    logger.info("🚀 ЗАПУСК МОНИТОРИНГА KIRO 2.0")
     logger.info("=" * 60)
-    logger.info("🎯 Отслеживаю 5 предметов:")
-    logger.info("   🌱 Octobloom, Zebrazinkle, Peppermint Vine")
-    logger.info("   🥚 Gem Egg")
-    logger.info("   🎫 Pollen Cone")
+    logger.info("🎯 Отслеживаю 9 предметов:")
+    logger.info("   🌱 5 семян: Octobloom, Zebrazinkle, Peppermint Vine, Reindeer Root, Spirit Sparkle")
+    logger.info("   🎪 3 ивент-шоп: Pet Shard Hyperhunger, Summer Kiwi, Chamberstick")
+    logger.info("   🎫 1 пасс-шоп: Pollen Cone")
     logger.info("🌱 Семена: каждые 30 сек (мин. 25 сек между проверками)")
-    logger.info("🥚 Яйца: по расписанию (00:30, 02:00, 05:00)")
+    logger.info("🎪 Ивент-шоп: 30-минутные циклы (:30, :50, 1:15, 5:30)")
     logger.info("🎫 Пасс-шоп: по расписанию (:40, 1:10)")
     logger.info("🏓 Самопинг: каждые 8 минут")
     logger.info("📊 Авто-статус: каждые 6 часов")
     logger.info("🎛️ Управление: Telegram команды")
     logger.info("=" * 60)
     
-    # Запуск всех потоков
     threads = [
         threading.Thread(target=monitor_seeds, name='SeedsMonitor', daemon=True),
-        threading.Thread(target=monitor_eggs, name='EggsMonitor', daemon=True),
+        threading.Thread(target=monitor_event_shop, name='EventShopMonitor', daemon=True),
         threading.Thread(target=monitor_pass_shop, name='PassShopMonitor', daemon=True),
         threading.Thread(target=self_pinger, name='SelfPinger', daemon=True),
         threading.Thread(target=health_monitor, name='HealthMonitor', daemon=True),
@@ -905,22 +919,24 @@ if __name__ == '__main__':
         logger.info(f"✅ Запущен поток: {thread.name}")
         time.sleep(1)
     
-    # Стартовое сообщение в Telegram
     seeds_list = "\n".join([f"{config['emoji']} {config['display_name']}" 
                           for config in TARGET_ITEMS.values() if SEEDS_CHANNEL_ID in config['channels']])
+    event_list = "\n".join([f"{config['emoji']} {config['display_name']}" 
+                          for config in TARGET_ITEMS.values() if EVENT_SHOP_CHANNEL_ID in config['channels']])
     
     startup_msg = (
-        "🚀 <b>МОНИТОРИНГ KIRO ЗАПУЩЕН (БЕЗ TOMATO)</b>\n\n"
-        f"🎯 <b>Отслеживаю 5 предметов:</b>\n"
+        "🚀 <b>МОНИТОРИНГ KIRO 2.0 ЗАПУЩЕН</b>\n\n"
+        f"🎯 <b>Отслеживаю 9 предметов:</b>\n"
         f"{seeds_list}\n"
-        f"💎 Gem Egg\n"
-        f"🍯 Pollen Cone\n\n"
-        "🌱 <b>Семена:</b> Каждые 30 сек (мин. 25 сек между проверками)\n"
-        "🥚 <b>Яйца:</b> По расписанию (00:30, 02:00, 05:00 в 00 и 30 минут)\n"
-        "🎫 <b>Пасс-шоп:</b> По расписанию (:40, 1:10 каждые 5 минут)\n\n"
+        f"{event_list}\n"
+        f"🍯 Pollen Cone (пасс-шоп)\n\n"
+        "🕐 <b>Расписание проверок:</b>\n"
+        "🌱 Семена: каждые 30 сек (мин. 25 сек между проверками)\n"
+        "🎪 Ивент-шоп: 30-минутные циклы (:30, :50, 1:15, 5:30)\n"
+        "🎫 Пасс-шоп: :40 и 1:10 каждые 5 минут\n\n"
         "🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
         "📊 <b>Авто-статус:</b> Каждые 6 часов\n"
-        "🛡️ <b>Защита от дублей:</b> Блокировки + минимум интервалы\n"
+        "🛡️ <b>Защита от дублей:</b> Циклы + запоминание сообщений + блокировки\n"
         "💪 <b>Безопасно для Discord:</b> ~150 запросов в час\n\n"
         "🎛️ <b>Команды управления:</b>\n"
         "/start - Информация\n"
