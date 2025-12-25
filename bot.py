@@ -83,14 +83,14 @@ TARGET_ITEMS = {
         'channels': [EVENT_SHOP_CHANNEL_ID]
     },
     'summer_kiwi': {
-        'keywords': ['summer kiwi', 'summerkiwi', ':summerkiwi'],
+        'keywords': ['summer kiwi', 'summerkiwi', ':summerkiwi', ':summer_kiwi:'],
         'sticker_id': "CAACAgIAAxkBAAEQFg9pTP0pDPHhwG3j2aVhbleBuea1MwACgIgAAn3naEpG0IHobd69wDYE",
         'emoji': '🥝',
         'display_name': 'Summer Kiwi',
         'channels': [EVENT_SHOP_CHANNEL_ID]
     },
     'chamberstick': {
-        'keywords': ['chamberstick', ':chamberstick'],
+        'keywords': ['chamberstick', ':chamberstick', ':chamber_stick:'],
         'sticker_id': "CAACAgIAAxkBAAEQFhFpTP0vCqlVLKgO_BGk0DcHhNQyawAC-JgAAkjTaErsL4vVzCGbCDYE",
         'emoji': '🕯️',
         'display_name': 'Chamberstick',
@@ -114,6 +114,7 @@ CHANNEL_NAMES = {
 }
 
 # ==================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ====================
+# Ключевые переменные для защиты от дублей
 last_processed_ids = {
     SEEDS_CHANNEL_ID: None,
     PASS_SHOP_CHANNEL_ID: None,
@@ -126,7 +127,6 @@ last_processed_cycles = {
     EVENT_SHOP_CHANNEL_ID: None
 }
 
-processed_messages_cache = set()
 bot_start_time = datetime.now()
 bot_status = "🟢 Инициализация"
 channel_enabled = True
@@ -138,8 +138,49 @@ last_ping_time = None
 telegram_offset = 0
 last_error = None
 
-STATE_FILE = 'bot_state.json'
 check_lock = threading.Lock()
+
+# Файл для сохранения состояния
+STATE_FILE = 'last_ids.json'
+
+# ==================== СОХРАНЕНИЕ СОСТОЯНИЯ ====================
+def save_state():
+    """Сохраняет последние ID в файл (только 3 значения)"""
+    try:
+        state = {
+            'last_processed_ids': last_processed_ids,
+            'found_items_count': found_items_count,
+            'discord_request_count': discord_request_count,
+            'ping_count': ping_count
+        }
+        
+        with open(STATE_FILE, 'w') as f:
+            json.dump(state, f)
+        
+        logger.debug(f"💾 Состояние сохранено: {last_processed_ids}")
+    except Exception as e:
+        logger.error(f"❌ Ошибка сохранения состояния: {e}")
+
+def load_state():
+    """Загружает последние ID из файла"""
+    global last_processed_ids, found_items_count, discord_request_count, ping_count
+    
+    try:
+        if os.path.exists(STATE_FILE):
+            with open(STATE_FILE, 'r') as f:
+                state = json.load(f)
+            
+            last_processed_ids = state.get('last_processed_ids', last_processed_ids)
+            found_items_count = state.get('found_items_count', found_items_count)
+            discord_request_count = state.get('discord_request_count', discord_request_count)
+            ping_count = state.get('ping_count', ping_count)
+            
+            logger.info(f"💾 Состояние загружено")
+            logger.info(f"📝 Последние ID: {last_processed_ids}")
+        else:
+            logger.info("📂 Файл состояния не найден, начинаем с чистого листа")
+    except Exception as e:
+        logger.error(f"❌ Ошибка загрузки состояния: {e}")
 
 # ==================== TELEGRAM КОМАНДЫ ====================
 def handle_telegram_command(chat_id, command, message=None):
@@ -226,7 +267,7 @@ def send_bot_status(chat_id):
         f"🔄 Отслеживаю: Kiro bot (3 канала)\n"
         f"🏓 Самопинг: {ping_count} раз (последний: {last_ping_str})\n"
         f"💾 Запросов к Discord: {discord_request_count}\n"
-        f"📝 В памяти: {len(processed_messages_cache)} сообщений\n\n"
+        f"📝 Последние ID: {last_processed_ids}\n\n"
         f"🎯 <b>Найдено предметов:</b>\n"
         f"{items_stats if items_stats else 'Еще не найдено'}"
     )
@@ -490,7 +531,6 @@ def get_current_cycle(channel_id):
         return f"{now.hour:02d}{cycle_minute:02d}"
     
     elif channel_id == EVENT_SHOP_CHANNEL_ID:
-        # 30-минутные циклы для ивент-шопа (00, 30)
         if now.minute < 30:
             cycle_minute = 0
         else:
@@ -503,11 +543,9 @@ def should_check_channel_now(channel_id):
     """Определяет, нужно ли проверять канал сейчас"""
     current_cycle = get_current_cycle(channel_id)
     
-    # Если уже обрабатывали этот цикл - не проверяем
     if last_processed_cycles.get(channel_id) == current_cycle:
         return False
     
-    # Для семян: дополнительная защита - минимум 25 секунд между проверками
     if channel_id == SEEDS_CHANNEL_ID:
         if not hasattr(should_check_channel_now, 'last_seeds_check'):
             should_check_channel_now.last_seeds_check = 0
@@ -519,38 +557,33 @@ def should_check_channel_now(channel_id):
         should_check_channel_now.last_seeds_check = current_time
         return True
     
-    # Для ивент-шопа: проверяем только в 00 и 30 минут (30-минутные циклы)
     elif channel_id == EVENT_SHOP_CHANNEL_ID:
         now = datetime.now()
         if now.minute not in [0, 30]:
             return False
         
-        # Внутри 30-минутного цикла проверяем 4 раза (как вы просили)
-        minute_in_cycle = now.minute % 30  # 0 или 30, но после % будет 0
+        minute_in_cycle = now.minute % 30
         second = now.second
         
-        # Проверки через 30 сек, 50 сек, 1 мин 15 сек и 5 мин 30 сек
-        if minute_in_cycle == 0 and second == 30:   # 00:30 или 30:30
+        if minute_in_cycle == 0 and second == 30:
             return True
-        if minute_in_cycle == 0 and second == 50:   # 00:50 или 30:50
+        if minute_in_cycle == 0 and second == 50:
             return True
-        if minute_in_cycle == 1 and second == 15:   # 01:15 или 31:15
+        if minute_in_cycle == 1 and second == 15:
             return True
-        if minute_in_cycle == 5 and second == 30:   # 05:30 или 35:30
+        if minute_in_cycle == 5 and second == 30:
             return True
         
         return False
     
-    # Для пасс-шопа: проверяем каждые 5 минут
     elif channel_id == PASS_SHOP_CHANNEL_ID:
         now = datetime.now()
         minute_in_cycle = now.minute % 5
         second = now.second
         
-        # Проверки через 40 сек и 1 мин 10 сек после начала цикла
-        if minute_in_cycle == 0 and second == 40:   # :00:40, :05:40, ...
+        if minute_in_cycle == 0 and second == 40:
             return True
-        if minute_in_cycle == 1 and second == 10:   # :01:10, :06:10, ...
+        if minute_in_cycle == 1 and second == 10:
             return True
         
         return False
@@ -564,12 +597,10 @@ def check_channel(channel_id):
     channel_name = CHANNEL_NAMES.get(channel_id, channel_id)
     current_cycle = get_current_cycle(channel_id)
     
-    # ВАЖНО: Проверяем, не обрабатывали ли мы уже этот цикл
     if last_processed_cycles.get(channel_id) == current_cycle:
         logger.debug(f"⏭️ Пропускаем {channel_name} - уже обрабатывали цикл {current_cycle}")
         return False
     
-    # Получаем сообщения
     messages = safe_fetch_discord_messages(channel_id, limit=2)
     if not messages:
         logger.debug(f"📭 В {channel_name} нет сообщений от Kiro")
@@ -581,19 +612,14 @@ def check_channel(channel_id):
     for message in messages:
         message_id = message['id']
         
-        # Пропускаем уже обработанные сообщения
-        if message_id in processed_messages_cache:
-            continue
-        
-        # Пропускаем старые сообщения
+        # ✅ ВАЖНО: ЕДИНСТВЕННАЯ ПРОВЕРКА - последний обработанный ID
         last_id = last_processed_ids.get(channel_id)
         if last_id and int(message_id) <= int(last_id):
             continue
         
-        # Нашли НОВОЕ сообщение от Kiro!
+        # ✅ НОВОЕ сообщение!
         found_new_message = True
-        processed_messages_cache.add(message_id)
-        last_processed_ids[channel_id] = message_id
+        last_processed_ids[channel_id] = message_id  # ← ЗАПОМИНАЕМ ТОЛЬКО ПОСЛЕДНИЙ ID
         
         text = extract_text_from_message(message)
         
@@ -603,7 +629,6 @@ def check_channel(channel_id):
             
             for keyword in item_config['keywords']:
                 if keyword.lower() in text:
-                    # Защита от дублей в этом цикле
                     cycle_key = f"{channel_id}_{current_cycle}_{item_name}"
                     
                     if cycle_key not in found_items_in_this_check:
@@ -636,11 +661,17 @@ def check_channel(channel_id):
         
         last_processed_cycles[channel_id] = current_cycle
         bot_status = f"🟢 Найдены предметы в {channel_name}"
+        
+        # Сохраняем состояние после успешной находки
+        save_state()
         return True
     
     last_processed_cycles[channel_id] = current_cycle
     logger.info(f"📭 Kiro в {channel_name} без нужных предметов")
     bot_status = f"🟢 Проверен {channel_name}"
+    
+    # Сохраняем состояние даже если не нашли предметов
+    save_state()
     return False
 
 # ==================== МОНИТОРЫ ====================
@@ -748,7 +779,7 @@ def health_monitor():
                 f"🔄 {bot_status}\n"
                 f"🏓 Самопинг: {ping_count} раз\n"
                 f"💾 Запросов к Discord: {discord_request_count}\n"
-                f"📝 В памяти: {len(processed_messages_cache)} сообщений\n\n"
+                f"📝 Последние ID: {last_processed_ids}\n\n"
                 f"🎯 <b>Найдено предметов:</b>\n"
                 f"{stats_text}\n\n"
                 f"✅ Бот стабильно работает"
@@ -819,7 +850,7 @@ def home():
             <p><strong>Время работы:</strong> {uptime_str}</p>
             <p><strong>Запросов к Discord:</strong> {discord_request_count}</p>
             <p><strong>Самопингов:</strong> {ping_count}</p>
-            <p><strong>Кэш сообщений:</strong> {len(processed_messages_cache)}</p>
+            <p><strong>Последние ID:</strong> {last_processed_ids}</p>
         </div>
         
         <div class="card">
@@ -885,11 +916,15 @@ def health_check():
         'discord_requests': discord_request_count,
         'channel_enabled': channel_enabled,
         'ping_count': ping_count,
+        'last_processed_ids': last_processed_ids,
         'found_items_total': sum(found_items_count.values())
     })
 
 # ==================== ЗАПУСК ====================
 if __name__ == '__main__':
+    # Загружаем сохраненное состояние перед запуском
+    load_state()
+    
     logger.info("=" * 60)
     logger.info("🚀 ЗАПУСК МОНИТОРИНГА KIRO 2.0")
     logger.info("=" * 60)
@@ -902,7 +937,7 @@ if __name__ == '__main__':
     logger.info("🎫 Пасс-шоп: по расписанию (:40, 1:10)")
     logger.info("🏓 Самопинг: каждые 8 минут")
     logger.info("📊 Авто-статус: каждые 6 часов")
-    logger.info("🎛️ Управление: Telegram команды")
+    logger.info("💾 Сохранение состояния: включено (последние ID)")
     logger.info("=" * 60)
     
     threads = [
@@ -934,9 +969,10 @@ if __name__ == '__main__':
         "🌱 Семена: каждые 30 сек (мин. 25 сек между проверками)\n"
         "🎪 Ивент-шоп: 30-минутные циклы (:30, :50, 1:15, 5:30)\n"
         "🎫 Пасс-шоп: :40 и 1:10 каждые 5 минут\n\n"
+        "💾 <b>Сохранение состояния:</b> Включено (защита от дублей при перезапуске)\n"
         "🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
         "📊 <b>Авто-статус:</b> Каждые 6 часов\n"
-        "🛡️ <b>Защита от дублей:</b> Циклы + запоминание сообщений + блокировки\n"
+        "🛡️ <b>Защита от дублей:</b> Циклы + запоминание последних ID\n"
         "💪 <b>Безопасно для Discord:</b> ~150 запросов в час\n\n"
         "🎛️ <b>Команды управления:</b>\n"
         "/start - Информация\n"
