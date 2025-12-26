@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 import re
 import json
 import sys
+from dateutil import parser  # Для парсинга timestamp Discord
 
 logging.basicConfig(
     level=logging.INFO,
@@ -127,6 +128,13 @@ last_processed_cycles = {
     EVENT_SHOP_CHANNEL_ID: None
 }
 
+# Для хранения timestamp последних сообщений
+last_message_timestamps = {
+    SEEDS_CHANNEL_ID: None,
+    PASS_SHOP_CHANNEL_ID: None,
+    EVENT_SHOP_CHANNEL_ID: None
+}
+
 bot_start_time = datetime.now()
 bot_status = "🟢 Инициализация"
 channel_enabled = True
@@ -145,10 +153,19 @@ STATE_FILE = 'last_ids.json'
 
 # ==================== СОХРАНЕНИЕ СОСТОЯНИЯ ====================
 def save_state():
-    """Сохраняет последние ID в файл (только 3 значения)"""
+    """Сохраняет последние ID в файл"""
     try:
+        # Конвертируем datetime в строки для сохранения
+        timestamps_str = {}
+        for channel_id, timestamp in last_message_timestamps.items():
+            if timestamp:
+                timestamps_str[channel_id] = timestamp.isoformat()
+            else:
+                timestamps_str[channel_id] = None
+        
         state = {
             'last_processed_ids': last_processed_ids,
+            'last_message_timestamps': timestamps_str,
             'found_items_count': found_items_count,
             'discord_request_count': discord_request_count,
             'ping_count': ping_count
@@ -157,13 +174,13 @@ def save_state():
         with open(STATE_FILE, 'w') as f:
             json.dump(state, f)
         
-        logger.debug(f"💾 Состояние сохранено: {last_processed_ids}")
+        logger.debug(f"💾 Состояние сохранено")
     except Exception as e:
         logger.error(f"❌ Ошибка сохранения состояния: {e}")
 
 def load_state():
     """Загружает последние ID из файла"""
-    global last_processed_ids, found_items_count, discord_request_count, ping_count
+    global last_processed_ids, found_items_count, discord_request_count, ping_count, last_message_timestamps
     
     try:
         if os.path.exists(STATE_FILE):
@@ -175,8 +192,18 @@ def load_state():
             discord_request_count = state.get('discord_request_count', discord_request_count)
             ping_count = state.get('ping_count', ping_count)
             
-            logger.info(f"💾 Состояние загружено")
-            logger.info(f"📝 Последние ID: {last_processed_ids}")
+            # Загружаем timestamps
+            timestamps_str = state.get('last_message_timestamps', {})
+            for channel_id, timestamp_str in timestamps_str.items():
+                if timestamp_str:
+                    try:
+                        last_message_timestamps[channel_id] = parser.parse(timestamp_str)
+                    except:
+                        last_message_timestamps[channel_id] = None
+                else:
+                    last_message_timestamps[channel_id] = None
+            
+            logger.info("💾 Состояние загружено")
         else:
             logger.info("📂 Файл состояния не найден, начинаем с чистого листа")
     except Exception as e:
@@ -267,7 +294,8 @@ def send_bot_status(chat_id):
         f"🔄 Отслеживаю: Kiro bot (3 канала)\n"
         f"🏓 Самопинг: {ping_count} раз (последний: {last_ping_str})\n"
         f"💾 Запросов к Discord: {discord_request_count}\n"
-        f"📝 Последние ID: {last_processed_ids}\n\n"
+        f"📝 Последние ID: {last_processed_ids}\n"
+        f"🕒 Последние timestamps: {last_message_timestamps}\n\n"
         f"🎯 <b>Найдено предметов:</b>\n"
         f"{items_stats if items_stats else 'Еще не найдено'}"
     )
@@ -539,11 +567,60 @@ def get_current_cycle(channel_id):
     
     return None
 
+def get_cycle_start_time(channel_id):
+    """Возвращает datetime начала текущего цикла"""
+    now = datetime.now()
+    
+    if channel_id == SEEDS_CHANNEL_ID:
+        # Семена: 5-минутные циклы (00:00, 00:05, 00:10...)
+        minute = now.minute
+        cycle_minute = (minute // 5) * 5
+        return now.replace(minute=cycle_minute, second=0, microsecond=0)
+    
+    elif channel_id == PASS_SHOP_CHANNEL_ID:
+        # Пасс-шоп: 5-минутные циклы (00:00, 00:05, 00:10...)
+        minute = now.minute
+        cycle_minute = (minute // 5) * 5
+        return now.replace(minute=cycle_minute, second=0, microsecond=0)
+    
+    elif channel_id == EVENT_SHOP_CHANNEL_ID:
+        # Ивент-шоп: 30-минутные циклы (00:00, 00:30, 01:00...)
+        if now.minute < 30:
+            return now.replace(minute=0, second=0, microsecond=0)
+        else:
+            return now.replace(minute=30, second=0, microsecond=0)
+    
+    return now
+
+def is_message_for_current_cycle(message, channel_id):
+    """Проверяет, относится ли сообщение к текущему циклу"""
+    try:
+        timestamp_str = message.get('timestamp')
+        if not timestamp_str:
+            logger.warning("⚠️ Сообщение без timestamp")
+            return True  # На всякий случай обрабатываем
+        
+        message_time = parser.parse(timestamp_str)
+        cycle_start = get_cycle_start_time(channel_id)
+        
+        # Сообщение относится к текущему циклу, если оно создано ПОСЛЕ начала цикла
+        is_for_current_cycle = message_time >= cycle_start
+        
+        if not is_for_current_cycle:
+            logger.debug(f"⏪ Сообщение от {message_time} слишком старое (цикл начался {cycle_start})")
+        
+        return is_for_current_cycle
+        
+    except Exception as e:
+        logger.error(f"❌ Ошибка проверки timestamp: {e}")
+        return True  # В случае ошибки обрабатываем сообщение
+
 def should_check_channel_now(channel_id):
     """Определяет, нужно ли проверять канал сейчас"""
     current_cycle = get_current_cycle(channel_id)
     
     if last_processed_cycles.get(channel_id) == current_cycle:
+        logger.debug(f"⏭️ Пропускаем - уже обрабатывали цикл {current_cycle}")
         return False
     
     if channel_id == SEEDS_CHANNEL_ID:
@@ -565,14 +642,19 @@ def should_check_channel_now(channel_id):
         minute_in_cycle = now.minute % 30
         second = now.second
         
-        if minute_in_cycle == 0 and second == 30:
-            return True
-        if minute_in_cycle == 0 and second == 50:
-            return True
-        if minute_in_cycle == 1 and second == 15:
-            return True
-        if minute_in_cycle == 5 and second == 30:
-            return True
+        # 6 проверок в 30-минутном цикле
+        check_times = [
+            (0, 30),   # 00:30
+            (0, 50),   # 00:50  
+            (1, 15),   # 01:15
+            (5, 30),   # 05:30
+            (10, 15),  # 10:15
+            (20, 15),  # 20:15
+        ]
+        
+        for check_minute, check_second in check_times:
+            if minute_in_cycle == check_minute and second == check_second:
+                return True
         
         return False
     
@@ -592,7 +674,7 @@ def should_check_channel_now(channel_id):
 
 def check_channel(channel_id):
     """Проверяет один канал Discord с защитой от дублей"""
-    global last_processed_ids, last_processed_cycles, found_items_count, bot_status
+    global last_processed_ids, last_processed_cycles, found_items_count, bot_status, last_message_timestamps
     
     channel_name = CHANNEL_NAMES.get(channel_id, channel_id)
     current_cycle = get_current_cycle(channel_id)
@@ -612,14 +694,28 @@ def check_channel(channel_id):
     for message in messages:
         message_id = message['id']
         
-        # ✅ ВАЖНО: ЕДИНСТВЕННАЯ ПРОВЕРКА - последний обработанный ID
+        # Проверяем timestamp сообщения (для всех каналов)
+        if not is_message_for_current_cycle(message, channel_id):
+            logger.debug(f"⏪ Игнорируем старое сообщение в {channel_name}")
+            continue  # Пропускаем сообщения из предыдущих циклов
+        
+        # Сохраняем timestamp сообщения
+        try:
+            timestamp_str = message.get('timestamp')
+            if timestamp_str:
+                message_time = parser.parse(timestamp_str)
+                last_message_timestamps[channel_id] = message_time
+        except Exception as e:
+            logger.error(f"❌ Ошибка получения timestamp: {e}")
+        
+        # Проверка по ID (старая логика)
         last_id = last_processed_ids.get(channel_id)
         if last_id and int(message_id) <= int(last_id):
             continue
         
-        # ✅ НОВОЕ сообщение!
+        # НОВОЕ сообщение!
         found_new_message = True
-        last_processed_ids[channel_id] = message_id  # ← ЗАПОМИНАЕМ ТОЛЬКО ПОСЛЕДНИЙ ID
+        last_processed_ids[channel_id] = message_id
         
         text = extract_text_from_message(message)
         
@@ -662,7 +758,6 @@ def check_channel(channel_id):
         last_processed_cycles[channel_id] = current_cycle
         bot_status = f"🟢 Найдены предметы в {channel_name}"
         
-        # Сохраняем состояние после успешной находки
         save_state()
         return True
     
@@ -670,7 +765,6 @@ def check_channel(channel_id):
     logger.info(f"📭 Kiro в {channel_name} без нужных предметов")
     bot_status = f"🟢 Проверен {channel_name}"
     
-    # Сохраняем состояние даже если не нашли предметов
     save_state()
     return False
 
@@ -692,8 +786,8 @@ def monitor_seeds():
             time.sleep(10)
 
 def monitor_event_shop():
-    """Мониторинг ивент-шопа (30-минутные циклы с 4 проверками)"""
-    logger.info("🎪 Запуск мониторинга ивент-шопа (30-минутные циклы)")
+    """Мониторинг ивент-шопа (30-минутные циклы с 6 проверками)"""
+    logger.info("🎪 Запуск мониторинга ивент-шопа (30-минутные циклы с 6 проверками)")
     
     while True:
         try:
@@ -779,7 +873,8 @@ def health_monitor():
                 f"🔄 {bot_status}\n"
                 f"🏓 Самопинг: {ping_count} раз\n"
                 f"💾 Запросов к Discord: {discord_request_count}\n"
-                f"📝 Последние ID: {last_processed_ids}\n\n"
+                f"📝 Последние ID: {last_processed_ids}\n"
+                f"🕒 Последние timestamps: {last_message_timestamps}\n\n"
                 f"🎯 <b>Найдено предметов:</b>\n"
                 f"{stats_text}\n\n"
                 f"✅ Бот стабильно работает"
@@ -851,6 +946,7 @@ def home():
             <p><strong>Запросов к Discord:</strong> {discord_request_count}</p>
             <p><strong>Самопингов:</strong> {ping_count}</p>
             <p><strong>Последние ID:</strong> {last_processed_ids}</p>
+            <p><strong>Последние timestamps:</strong> {last_message_timestamps}</p>
         </div>
         
         <div class="card">
@@ -878,9 +974,9 @@ def home():
         
         <div class="card">
             <h2>🎯 Стратегия мониторинга</h2>
-            <p><strong>🌱 Семена (5 предметов):</strong> Постоянно, каждые 30 секунд</p>
-            <p><strong>🎪 Ивент-шоп (3 предмета):</strong> 30-минутные циклы (:30, :50, 1:15, 5:30)</p>
-            <p><strong>🎫 Пасс-шоп (1 предмет):</strong> По расписанию (:40, 1:10)</p>
+            <p><strong>🌱 Семена (5 предметов):</strong> Постоянно, каждые 30 секунд + защита от старых сообщений</p>
+            <p><strong>🎪 Ивент-шоп (3 предмета):</strong> 30-минутные циклы с 6 проверками (:30, :50, 1:15, 5:30, 10:15, 20:15)</p>
+            <p><strong>🎫 Пасс-шоп (1 предмет):</strong> По расписанию (:40, 1:10) + защита от старых сообщений</p>
         </div>
         
         <div class="card">
@@ -917,27 +1013,28 @@ def health_check():
         'channel_enabled': channel_enabled,
         'ping_count': ping_count,
         'last_processed_ids': last_processed_ids,
+        'last_message_timestamps': {k: (v.isoformat() if v else None) for k, v in last_message_timestamps.items()},
         'found_items_total': sum(found_items_count.values())
     })
 
 # ==================== ЗАПУСК ====================
 if __name__ == '__main__':
-    # Загружаем сохраненное состояние перед запуском
     load_state()
     
     logger.info("=" * 60)
-    logger.info("🚀 ЗАПУСК МОНИТОРИНГА KIRO 2.0")
+    logger.info("🚀 ЗАПУСК МОНИТОРИНГА KIRO 2.1")
     logger.info("=" * 60)
     logger.info("🎯 Отслеживаю 9 предметов:")
     logger.info("   🌱 5 семян: Octobloom, Zebrazinkle, Peppermint Vine, Reindeer Root, Spirit Sparkle")
     logger.info("   🎪 3 ивент-шоп: Pet Shard Hyperhunger, Summer Kiwi, Chamberstick")
     logger.info("   🎫 1 пасс-шоп: Pollen Cone")
-    logger.info("🌱 Семена: каждые 30 сек (мин. 25 сек между проверками)")
-    logger.info("🎪 Ивент-шоп: 30-минутные циклы (:30, :50, 1:15, 5:30)")
-    logger.info("🎫 Пасс-шоп: по расписанию (:40, 1:10)")
+    logger.info("🌱 Семена: каждые 30 сек + защита от старых сообщений")
+    logger.info("🎪 Ивент-шоп: 30-минутные циклы с 6 проверками (:30, :50, 1:15, 5:30, 10:15, 20:15)")
+    logger.info("🎫 Пасс-шоп: по расписанию (:40, 1:10) + защита от старых сообщений")
+    logger.info("🛡️ Защита от старых сообщений: включена для всех каналов")
     logger.info("🏓 Самопинг: каждые 8 минут")
     logger.info("📊 Авто-статус: каждые 6 часов")
-    logger.info("💾 Сохранение состояния: включено (последние ID)")
+    logger.info("💾 Сохранение состояния: включено (ID + timestamps)")
     logger.info("=" * 60)
     
     threads = [
@@ -960,19 +1057,22 @@ if __name__ == '__main__':
                           for config in TARGET_ITEMS.values() if EVENT_SHOP_CHANNEL_ID in config['channels']])
     
     startup_msg = (
-        "🚀 <b>МОНИТОРИНГ KIRO 2.0 ЗАПУЩЕН</b>\n\n"
+        "🚀 <b>МОНИТОРИНГ KIRO 2.1 ЗАПУЩЕН</b>\n\n"
         f"🎯 <b>Отслеживаю 9 предметов:</b>\n"
         f"{seeds_list}\n"
         f"{event_list}\n"
         f"🍯 Pollen Cone (пасс-шоп)\n\n"
         "🕐 <b>Расписание проверок:</b>\n"
         "🌱 Семена: каждые 30 сек (мин. 25 сек между проверками)\n"
-        "🎪 Ивент-шоп: 30-минутные циклы (:30, :50, 1:15, 5:30)\n"
+        "🎪 Ивент-шоп: 30-минутные циклы (:30, :50, 1:15, 5:30, 10:15, 20:15)\n"
         "🎫 Пасс-шоп: :40 и 1:10 каждые 5 минут\n\n"
-        "💾 <b>Сохранение состояния:</b> Включено (защита от дублей при перезапуске)\n"
+        "🛡️ <b>НОВАЯ ЗАЩИТА ОТ СТАРЫХ СООБЩЕНИЙ (для всех каналов):</b>\n"
+        "• Игнорирует сообщения из предыдущих циклов\n"
+        "• Только свежие стоки (timestamp-based фильтрация)\n"
+        "• Решена проблема ложных срабатываний\n\n"
+        "💾 <b>Сохранение состояния:</b> Включено (ID + timestamps)\n"
         "🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
         "📊 <b>Авто-статус:</b> Каждые 6 часов\n"
-        "🛡️ <b>Защита от дублей:</b> Циклы + запоминание последних ID\n"
         "💪 <b>Безопасно для Discord:</b> ~150 запросов в час\n\n"
         "🎛️ <b>Команды управления:</b>\n"
         "/start - Информация\n"
