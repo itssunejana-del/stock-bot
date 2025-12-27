@@ -8,7 +8,6 @@ from datetime import datetime, timedelta
 import re
 import json
 import sys
-from dateutil import parser  # Для парсинга timestamp Discord
 
 logging.basicConfig(
     level=logging.INFO,
@@ -197,7 +196,7 @@ def load_state():
             for channel_id, timestamp_str in timestamps_str.items():
                 if timestamp_str:
                     try:
-                        last_message_timestamps[channel_id] = parser.parse(timestamp_str)
+                        last_message_timestamps[channel_id] = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
                     except:
                         last_message_timestamps[channel_id] = None
                 else:
@@ -568,7 +567,7 @@ def get_current_cycle(channel_id):
     return None
 
 def get_cycle_start_time(channel_id):
-    """Возвращает datetime начала текущего цикла"""
+    """Возвращает datetime начала текущего цикл"""
     now = datetime.now()
     
     if channel_id == SEEDS_CHANNEL_ID:
@@ -592,6 +591,29 @@ def get_cycle_start_time(channel_id):
     
     return now
 
+def parse_discord_timestamp(timestamp_str):
+    """Парсит Discord timestamp без dateutil"""
+    try:
+        # Формат: "2023-12-26T00:00:00.000Z"
+        if not timestamp_str:
+            return None
+        
+        # Убираем миллисекунды и 'Z'
+        clean_str = timestamp_str
+        
+        # Убираем .000 (миллисекунды)
+        if '.' in clean_str:
+            clean_str = clean_str.split('.')[0]
+        
+        # Заменяем Z на +00:00 для fromisoformat
+        if clean_str.endswith('Z'):
+            clean_str = clean_str[:-1] + '+00:00'
+        
+        return datetime.fromisoformat(clean_str)
+    except Exception as e:
+        logger.error(f"❌ Ошибка парсинга timestamp '{timestamp_str}': {e}")
+        return None
+
 def is_message_for_current_cycle(message, channel_id):
     """Проверяет, относится ли сообщение к текущему циклу"""
     try:
@@ -600,7 +622,11 @@ def is_message_for_current_cycle(message, channel_id):
             logger.warning("⚠️ Сообщение без timestamp")
             return True  # На всякий случай обрабатываем
         
-        message_time = parser.parse(timestamp_str)
+        message_time = parse_discord_timestamp(timestamp_str)
+        if not message_time:
+            logger.warning("⚠️ Не удалось распарсить timestamp")
+            return True  # На всякий случай обрабатываем
+        
         cycle_start = get_cycle_start_time(channel_id)
         
         # Сообщение относится к текущему циклу, если оно создано ПОСЛЕ начала цикла
@@ -703,8 +729,9 @@ def check_channel(channel_id):
         try:
             timestamp_str = message.get('timestamp')
             if timestamp_str:
-                message_time = parser.parse(timestamp_str)
-                last_message_timestamps[channel_id] = message_time
+                message_time = parse_discord_timestamp(timestamp_str)
+                if message_time:
+                    last_message_timestamps[channel_id] = message_time
         except Exception as e:
             logger.error(f"❌ Ошибка получения timestamp: {e}")
         
