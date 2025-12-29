@@ -25,12 +25,12 @@ TELEGRAM_BOT_CHAT_ID = os.getenv('TELEGRAM_BOT_CHAT_ID')
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 SEEDS_CHANNEL_ID = os.getenv('SEEDS_CHANNEL_ID')
 EVENT_SHOP_CHANNEL_ID = os.getenv('EVENT_SHOP_CHANNEL_ID')
-PASS_SHOP_CHANNEL_ID = os.getenv('PASS_SHOP_CHANNEL_ID')
+PASS_SHOP_CHANNEL_ID = os.getenv('PASS_SHOP_CHANNEL_ID')  # Оставляем для будущего
 RENDER_SERVICE_URL = os.getenv('RENDER_SERVICE_URL', 'https://stock-bot-cj4s.onrender.com')
 
 # Проверка переменных
 REQUIRED_VARS = ['TELEGRAM_TOKEN', 'TELEGRAM_CHANNEL_ID', 'TELEGRAM_BOT_CHAT_ID', 
-                 'DISCORD_TOKEN', 'SEEDS_CHANNEL_ID', 'PASS_SHOP_CHANNEL_ID']
+                 'DISCORD_TOKEN', 'SEEDS_CHANNEL_ID']
 missing = [var for var in REQUIRED_VARS if not os.getenv(var)]
 if missing:
     logger.error(f"❌ Отсутствуют переменные: {missing}")
@@ -58,42 +58,31 @@ TARGET_ITEMS = {
         'emoji': '🎆',
         'display_name': 'Firework Fern',
         'channels': [SEEDS_CHANNEL_ID]
-    },
-    
-    # 🎫 Пасс-шоп (1 предмет)
-    'pollen_cone': {
-        'keywords': ['pollen cone', 'pollencone', ':pollencone'],
-        'sticker_id': "CAACAgIAAxkBAAEP-4hpOtmoKIOXpzx89yFx3StQK77KzQACQI8AAuZU2Emfi_MTLWoHDjYE",
-        'emoji': '🍯',
-        'display_name': 'Pollen Cone',
-        'channels': [PASS_SHOP_CHANNEL_ID]
     }
+    # 🎫 Пасс-шоп временно отключен (Pollen Cone не нужен)
+    # 🎪 Ивент-шоп временно отключен
 }
 
 CHANNEL_NAMES = {
-    SEEDS_CHANNEL_ID: '🌱 Семена',
-    PASS_SHOP_CHANNEL_ID: '🎫 Пасс-шоп'
+    SEEDS_CHANNEL_ID: '🌱 Семена'
 }
 
 # ==================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ====================
 # Ключевые переменные для защиты от дублей
 last_processed_ids = {
-    SEEDS_CHANNEL_ID: None,
-    PASS_SHOP_CHANNEL_ID: None
+    SEEDS_CHANNEL_ID: None
 }
 
 last_processed_cycles = {
-    SEEDS_CHANNEL_ID: None,
-    PASS_SHOP_CHANNEL_ID: None
+    SEEDS_CHANNEL_ID: None
 }
 
 # Для хранения timestamp последних сообщений
 last_message_timestamps = {
-    SEEDS_CHANNEL_ID: None,
-    PASS_SHOP_CHANNEL_ID: None
+    SEEDS_CHANNEL_ID: None
 }
 
-# 🔴 НОВОЕ: Аварийный режим
+# Аварийный режим Discord
 discord_emergency_mode = False
 discord_emergency_start = None
 discord_error_count = 0
@@ -193,7 +182,7 @@ def load_state():
     except Exception as e:
         logger.error(f"❌ Ошибка загрузки состояния: {e}")
 
-# 🔴 НОВОЕ: Функции для управления аварийным режимом
+# ==================== АВАРИЙНЫЙ РЕЖИМ DISCORD ====================
 def update_error_count():
     """Обновляет счётчик ошибок Discord"""
     global discord_error_count, discord_last_error_time
@@ -279,7 +268,7 @@ def handle_telegram_command(chat_id, command, message=None):
     
     if command == '/start':
         seeds_list = "\n".join([f"{config['emoji']} {config['display_name']}" 
-                              for config in TARGET_ITEMS.values() if SEEDS_CHANNEL_ID in config['channels']])
+                              for config in TARGET_ITEMS.values()])
         
         emergency_status = ""
         if discord_emergency_mode and discord_emergency_start:
@@ -294,12 +283,12 @@ def handle_telegram_command(chat_id, command, message=None):
             f"📢 <b>В канал ({TELEGRAM_CHANNEL_ID}):</b> Стикеры при обнаружении\n"
             "🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
             f"🛡️ <b>Аварийный режим:</b> {'🚨 АКТИВЕН' if discord_emergency_mode else '✅ ОТКЛЮЧЁН'}\n\n"
-            f"🎯 <b>Отслеживаю 4 предмета:</b>\n"
-            f"{seeds_list}\n"
-            f"🍯 Pollen Cone (пасс-шоп)\n\n"
-            "⚠️ <b>Временные изменения:</b>\n"
-            "• Ивент-шоп отключен (бот Kiro временно сломан)\n"
-            "• Работают: Семена (3) + Пасс-шоп (1)\n"
+            f"🎯 <b>Отслеживаю 3 семена:</b>\n"
+            f"{seeds_list}\n\n"
+            "📝 <b>Текущий статус мониторинга:</b>\n"
+            "• 🌱 Семена: Активны (3 предмета)\n"
+            "• 🎫 Пасс-шоп: Отключён (Pollen Cone не нужен)\n"
+            "• 🎪 Ивент-шоп: Отключён (бот Kiro сломан)\n"
             f"{emergency_status}\n\n"
             "🎛️ <b>Команды:</b>\n"
             "/start - Информация\n"
@@ -322,11 +311,12 @@ def handle_telegram_command(chat_id, command, message=None):
             f"/enable - Включить уведомления в канал\n"
             f"/disable - Выключить уведомления в канал\n"
             f"/help - Показать это сообщение\n\n"
-            f"🎯 <b>Отслеживаю 4 предмета:</b>\n"
+            f"🎯 <b>Отслеживаю 3 семена:</b>\n"
             f"{items_list}\n\n"
-            f"⚠️ <b>Временные изменения:</b>\n"
-            f"• Ивент-шоп отключен\n"
-            f"• Работают: Семена (3) + Пасс-шоп (1)\n\n"
+            f"📝 <b>Текущий статус мониторинга:</b>\n"
+            f"• 🌱 Семена: Активны (3 предмета)\n"
+            f"• 🎫 Пасс-шоп: Отключён (Pollen Cone не нужен)\n"
+            f"• 🎪 Ивент-шоп: Отключён (бот Kiro сломан)\n\n"
             f"🛡️ <b>Аварийный режим Discord:</b>\n"
             f"• Автоматически активируется при частых ошибках\n"
             f"• Приостанавливает запросы на 30 минут\n"
@@ -383,16 +373,17 @@ def send_bot_status(chat_id):
         f"⏰ Время работы: {hours:.1f} часов\n"
         f"📅 Запущен: {bot_start_time.strftime('%d.%m.%Y %H:%M')}\n"
         f"📢 Канал: {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}\n"
-        f"🔄 Отслеживаю: Семена (3) + Пасс-шоп (1)\n"
+        f"🔄 Отслеживаю: 3 семена (Octobloom, Zebrazinkle, Firework Fern)\n"
         f"🏓 Самопинг: {ping_count} раз (последний: {last_ping_str})\n"
         f"💾 Запросов к Discord: {discord_request_count}\n"
         f"📝 Последние ID: {last_processed_ids}\n"
         f"🕒 Последние timestamps: {last_message_timestamps}{emergency_info}\n\n"
         f"🎯 <b>Найдено предметов:</b>\n"
         f"{items_stats if items_stats else 'Еще не найдено'}\n\n"
-        f"⚠️ <b>Временные изменения:</b>\n"
-        f"• Ивент-шоп отключен\n"
-        f"• Работают: Семена (3) + Пасс-шоп (1)"
+        f"📝 <b>Текущий статус мониторинга:</b>\n"
+        f"• 🌱 Семена: Активны (3 предмета)\n"
+        f"• 🎫 Пасс-шоп: Отключён (Pollen Cone не нужен)\n"
+        f"• 🎪 Ивент-шоп: Отключён (бот Kiro сломан)"
     )
     
     if last_error:
@@ -550,12 +541,11 @@ def send_to_bot(text, disable_notification=False):
         return False
     return send_telegram_message(TELEGRAM_BOT_CHAT_ID, text, disable_notification=disable_notification)
 
-# 🔴 ОБНОВЛЁННАЯ ФУНКЦИЯ: Добавлена проверка аварийного режима
 def safe_fetch_discord_messages(channel_id, limit=2, max_retries=1):
     """Устойчивый запрос к Discord API"""
     global discord_request_count, last_discord_request, last_error
     
-    # 🔴 Проверяем аварийный режим
+    # Проверяем аварийный режим
     if not check_emergency_mode():
         logger.warning("⏸️ Аварийный режим Discord активен - пропускаем запрос")
         return None
@@ -569,7 +559,7 @@ def safe_fetch_discord_messages(channel_id, limit=2, max_retries=1):
             current_time = time.time()
             time_since_last = current_time - last_discord_request
             
-            # Увеличиваем минимальную задержку до 20 секунд
+            # Минимальная задержка 20 секунд
             if time_since_last < 20:
                 wait_time = 20 - time_since_last
                 logger.debug(f"⏳ Защита от лимита Discord: жду {wait_time:.1f} сек")
@@ -611,7 +601,7 @@ def safe_fetch_discord_messages(channel_id, limit=2, max_retries=1):
                 last_error = f"Discord лимит: {retry_after} сек"
                 logger.warning(f"⏳ Discord API лимит. Жду {retry_after} сек.")
                 
-                # 🔴 Обновляем счётчик ошибок
+                # Обновляем счётчик ошибок
                 update_error_count()
                 
                 # Ждём на 2 секунды больше, чем просит Discord
@@ -622,7 +612,7 @@ def safe_fetch_discord_messages(channel_id, limit=2, max_retries=1):
                 last_error = f"Discord API ошибка: {response.status_code}"
                 logger.error(f"❌ Ошибка Discord API {response.status_code}")
                 
-                # 🔴 Обновляем счётчик ошибок
+                # Обновляем счётчик ошибок
                 update_error_count()
                 
                 time.sleep(5)
@@ -632,7 +622,7 @@ def safe_fetch_discord_messages(channel_id, limit=2, max_retries=1):
             last_error = "Таймаут Discord"
             logger.warning(f"⏰ Таймаут запроса к Discord (попытка {attempt+1}/{max_retries})")
             
-            # 🔴 Обновляем счётчик ошибок
+            # Обновляем счётчик ошибок
             update_error_count()
             
             if attempt < max_retries - 1:
@@ -642,7 +632,7 @@ def safe_fetch_discord_messages(channel_id, limit=2, max_retries=1):
             last_error = f"Ошибка Discord: {e}"
             logger.error(f"❌ Ошибка Discord: {e}")
             
-            # 🔴 Обновляем счётчик ошибок
+            # Обновляем счётчик ошибок
             update_error_count()
             
             time.sleep(3)
@@ -674,10 +664,6 @@ def get_current_cycle(channel_id):
         cycle_minute = (now.minute // 5) * 5
         return f"{now.hour:02d}{cycle_minute:02d}"
     
-    elif channel_id == PASS_SHOP_CHANNEL_ID:
-        cycle_minute = (now.minute // 5) * 5
-        return f"{now.hour:02d}{cycle_minute:02d}"
-    
     return None
 
 def get_cycle_start_time(channel_id):
@@ -686,12 +672,6 @@ def get_cycle_start_time(channel_id):
     
     if channel_id == SEEDS_CHANNEL_ID:
         # Семена: 5-минутные циклы (00:00, 00:05, 00:10...)
-        minute = now.minute
-        cycle_minute = (minute // 5) * 5
-        return now.replace(minute=cycle_minute, second=0, microsecond=0)
-    
-    elif channel_id == PASS_SHOP_CHANNEL_ID:
-        # Пасс-шоп: 5-минутные циклы (00:00, 00:05, 00:10...)
         minute = now.minute
         cycle_minute = (minute // 5) * 5
         return now.replace(minute=cycle_minute, second=0, microsecond=0)
@@ -750,7 +730,7 @@ def is_message_for_current_cycle(message, channel_id):
 
 def should_check_channel_now(channel_id):
     """Определяет, нужно ли проверять канал сейчас"""
-    # 🔴 Проверяем аварийный режим
+    # Проверяем аварийный режим
     if not check_emergency_mode():
         return False
     
@@ -765,23 +745,11 @@ def should_check_channel_now(channel_id):
             should_check_channel_now.last_seeds_check = 0
         
         current_time = time.time()
-        if current_time - should_check_channel_now.last_seeds_check < 60:  # Увеличили до 60 секунд
+        if current_time - should_check_channel_now.last_seeds_check < 30:  # 30 секунд!
             return False
         
         should_check_channel_now.last_seeds_check = current_time
         return True
-    
-    elif channel_id == PASS_SHOP_CHANNEL_ID:
-        now = datetime.now()
-        minute_in_cycle = now.minute % 5
-        second = now.second
-        
-        if minute_in_cycle == 0 and second == 40:
-            return True
-        if minute_in_cycle == 1 and second == 10:
-            return True
-        
-        return False
     
     return False
 
@@ -789,7 +757,7 @@ def check_channel(channel_id):
     """Проверяет один канал Discord с защитой от дублей"""
     global last_processed_ids, last_processed_cycles, found_items_count, bot_status, last_message_timestamps
     
-    # 🔴 Проверяем аварийный режим
+    # Проверяем аварийный режим
     if not check_emergency_mode():
         return False
     
@@ -888,8 +856,8 @@ def check_channel(channel_id):
 
 # ==================== МОНИТОРЫ ====================
 def monitor_seeds():
-    """Мониторинг семян (каждые 60 секунд)"""
-    logger.info("🌱 Запуск мониторинга семян (каждые 60 секунд)")
+    """Мониторинг семян (каждые 30 секунд)"""
+    logger.info("🌱 Запуск мониторинга семян (каждые 30 секунд)")
     
     while True:
         try:
@@ -897,29 +865,18 @@ def monitor_seeds():
                 with check_lock:
                     check_channel(SEEDS_CHANNEL_ID)
             
-            time.sleep(60)  # Увеличили до 60 секунд
+            time.sleep(30)  # Проверяем каждые 30 секунд
             
         except Exception as e:
             logger.error(f"💥 Ошибка в мониторинге семян: {e}")
             time.sleep(10)
 
 def monitor_pass_shop():
-    """Мониторинг пасс-шопа (по расписанию)"""
-    logger.info("🎫 Запуск мониторинга пасс-шопа (по расписанию)")
-    
+    """Мониторинг пасс-шопа временно отключен"""
+    logger.info("🎫 Мониторинг пасс-шопа временно отключен (Pollen Cone не нужен)")
     while True:
-        try:
-            if should_check_channel_now(PASS_SHOP_CHANNEL_ID):
-                with check_lock:
-                    check_channel(PASS_SHOP_CHANNEL_ID)
-            
-            time.sleep(1)
-            
-        except Exception as e:
-            logger.error(f"💥 Ошибка в мониторинге пасс-шопа: {e}")
-            time.sleep(10)
+        time.sleep(3600)
 
-# Временная функция (отключена)
 def monitor_event_shop():
     """Временно отключено"""
     logger.info("🎪 Мониторинг ивент-шопа временно отключен")
@@ -997,9 +954,10 @@ def health_monitor():
                 f"🕒 Последние timestamps: {last_message_timestamps}{emergency_info}\n\n"
                 f"🎯 <b>Найдено предметов:</b>\n"
                 f"{stats_text}\n\n"
-                f"⚠️ <b>Временные изменения:</b>\n"
-                f"• Ивент-шоп отключен\n"
-                f"• Работают: Семена (3) + Пасс-шоп (1)\n\n"
+                f"📝 <b>Текущий статус мониторинга:</b>\n"
+                f"• 🌱 Семена: Активны (3 предмета)\n"
+                f"• 🎫 Пасс-шоп: Отключён (Pollen Cone не нужен)\n"
+                f"• 🎪 Ивент-шоп: Отключён (бот Kiro сломан)\n\n"
                 f"✅ Бот стабильно работает"
             )
             
@@ -1033,8 +991,6 @@ def home():
         channels_str = ""
         if SEEDS_CHANNEL_ID in item['channels']:
             channels_str += "🌱 "
-        if PASS_SHOP_CHANNEL_ID in item['channels']:
-            channels_str += "🎫 "
         tracked_items.append(f"{item['emoji']} {item['display_name']} → {channels_str}")
     
     emergency_info = ""
@@ -1055,7 +1011,7 @@ def home():
     return f"""
     <html>
     <head>
-        <title>🌱 Мониторинг Kiro (4 предмета)</title>
+        <title>🌱 Мониторинг Kiro (3 семена)</title>
         <meta charset="utf-8">
         <style>
             body {{ font-family: Arial, sans-serif; margin: 40px; }}
@@ -1074,7 +1030,7 @@ def home():
         </style>
     </head>
     <body>
-        <h1>🌱 Мониторинг Kiro (4 предмета)</h1>
+        <h1>🌱 Мониторинг Kiro (3 семена)</h1>
         
         {emergency_info}
         
@@ -1090,9 +1046,10 @@ def home():
         </div>
         
         <div class="card">
-            <h2>⚠️ Временные изменения</h2>
-            <p><strong>Ивент-шоп отключен</strong> (бот Kiro временно сломан)</p>
-            <p><strong>Работают: Семена (3) + Пасс-шоп (1)</strong></p>
+            <h2>📝 Текущий статус мониторинга</h2>
+            <p><strong>🌱 Семена:</strong> Активны (3 предмета)</p>
+            <p><strong>🎫 Пасс-шоп:</strong> Отключён (Pollen Cone не нужен)</p>
+            <p><strong>🎪 Ивент-шоп:</strong> Отключён (бот Kiro сломан)</p>
         </div>
         
         <div class="card">
@@ -1114,16 +1071,24 @@ def home():
         </div>
         
         <div class="card">
-            <h2>🎯 Отслеживаемые предметы (4 предмета)</h2>
+            <h2>🎯 Отслеживаемые предметы (3 семена)</h2>
             <ul>{"".join([f'<li>{item}</li>' for item in tracked_items])}</ul>
         </div>
         
         <div class="card">
-            <h2>🎯 Стратегия мониторинга</h2>
-            <p><strong>🌱 Семена (3 предмета):</strong> Каждые 60 секунд + защита от старых сообщений</p>
-            <p><strong>🎫 Пасс-шоп (1 предмет):</strong> По расписанию (:40, 1:10) + защита от старых сообщений</p>
-            <p><strong>🎪 Ивент-шоп:</strong> Временно отключен</p>
-            <p><strong>🛡️ Аварийный режим:</strong> Активируется при 5 ошибках Discord за 5 минут</p>
+            <h2>⏰ Частота проверок</h2>
+            <p><strong>🌱 Семена:</strong> Каждые 30 секунд</p>
+            <p><strong>💾 Защита Discord:</strong> Минимум 20 секунд между запросами</p>
+            <p><strong>🔄 Циклы:</strong> 5-минутные циклы (00:00, 00:05, 00:10...)</p>
+            <p><strong>🎯 Вероятность поймать сток:</strong> Высокая (за 5 минут: 10 проверок)</p>
+        </div>
+        
+        <div class="card">
+            <h2>🛡️ Аварийный режим Discord</h2>
+            <p><strong>Статус:</strong> {'🚨 АКТИВЕН' if discord_emergency_mode else '✅ ОТКЛЮЧЁН'}</p>
+            <p><strong>Активация:</strong> 5 ошибок Discord за 5 минут</p>
+            <p><strong>Перерыв:</strong> 30 минут</p>
+            <p><strong>Восстановление:</strong> Автоматическое</p>
         </div>
         
         <div class="card">
@@ -1174,12 +1139,13 @@ if __name__ == '__main__':
     logger.info("=" * 60)
     logger.info("🚀 ЗАПУСК МОНИТОРИНГА KIRO С АВАРИЙНЫМ РЕЖИМОМ")
     logger.info("=" * 60)
-    logger.info("🎯 Отслеживаю 4 предмета:")
-    logger.info("   🌱 3 семена: Octobloom, Zebrazinkle, Firework Fern")
-    logger.info("   🎫 1 пасс-шоп: Pollen Cone")
-    logger.info("⚠️ Ивент-шоп отключен (бот Kiro временно сломан)")
-    logger.info("🌱 Семена: каждые 60 сек + защита от старых сообщений")
-    logger.info("🎫 Пасс-шоп: по расписанию (:40, 1:10) + защита от старых сообщений")
+    logger.info("🎯 Отслеживаю 3 семена:")
+    logger.info("   🌱 Octobloom, Zebrazinkle, Firework Fern")
+    logger.info("📝 Текущий статус мониторинга:")
+    logger.info("   • 🌱 Семена: Активны (3 предмета) - проверка каждые 30 секунд")
+    logger.info("   • 🎫 Пасс-шоп: Отключён (Pollen Cone не нужен)")
+    logger.info("   • 🎪 Ивент-шоп: Отключён (бот Kiro сломан)")
+    logger.info("⏰ Частота проверок: каждые 30 секунд")
     logger.info("🛡️ Аварийный режим Discord: 5 ошибок за 5 мин → перерыв 30 мин")
     logger.info("🏓 Самопинг: каждые 8 минут")
     logger.info("📊 Авто-статус: каждые 6 часов")
@@ -1204,7 +1170,7 @@ if __name__ == '__main__':
         time.sleep(1)
     
     seeds_list = "\n".join([f"{config['emoji']} {config['display_name']}" 
-                          for config in TARGET_ITEMS.values() if SEEDS_CHANNEL_ID in config['channels']])
+                          for config in TARGET_ITEMS.values()])
     
     emergency_alert = ""
     if discord_emergency_mode and discord_emergency_start:
@@ -1222,21 +1188,20 @@ if __name__ == '__main__':
     
     startup_msg = (
         "🚀 <b>МОНИТОРИНГ KIRO ЗАПУЩЕН С АВАРИЙНЫМ РЕЖИМОМ</b>\n\n"
-        f"🎯 <b>Отслеживаю 4 предмета:</b>\n"
-        f"{seeds_list}\n"
-        f"🍯 Pollen Cone (пасс-шоп)\n\n"
-        "⚠️ <b>Временные изменения:</b>\n"
-        "• Ивент-шоп отключен (бот Kiro временно сломан)\n"
-        "• Работают: Семена (3) + Пасс-шоп (1)"
+        f"🎯 <b>Отслеживаю 3 семена:</b>\n"
+        f"{seeds_list}\n\n"
+        "📝 <b>Текущий статус мониторинга:</b>\n"
+        "• 🌱 Семена: Активны (3 предмета) - проверка каждые 30 секунд\n"
+        "• 🎫 Пасс-шоп: Отключён (Pollen Cone не нужен)\n"
+        "• 🎪 Ивент-шоп: Отключён (бот Kiro сломан)"
         f"{emergency_alert}\n\n"
-        "🕐 <b>Расписание проверок:</b>\n"
-        "🌱 Семена: каждые 60 сек (мин. 60 сек между проверками)\n"
-        "🎫 Пасс-шоп: :40 и 1:10 каждые 5 минут\n\n"
-        "🛡️ <b>НОВАЯ СИСТЕМА АВАРИЙНОГО РЕЖИМА:</b>\n"
+        "⏰ <b>Частота проверок:</b>\n"
+        "🌱 Семена: каждые 30 секунд\n"
+        "💾 Защита Discord: минимум 20 секунд между запросами\n\n"
+        "🛡️ <b>АВАРИЙНЫЙ РЕЖИМ DISCORD:</b>\n"
         "• 5 ошибок Discord за 5 минут → перерыв 30 минут\n"
         "• Все запросы к Discord автоматически приостанавливаются\n"
-        "• Автоматическое восстановление через 30 минут\n"
-        "• Уведомления в Telegram при активации/восстановлении\n\n"
+        "• Автоматическое восстановление через 30 минут\n\n"
         "💾 <b>Сохранение состояния:</b> Включено (ID + timestamps + emergency)\n"
         "🏓 <b>Самопинг:</b> Активен (каждые 8 минут)\n"
         "📊 <b>Авто-статус:</b> Каждые 6 часов\n\n"
