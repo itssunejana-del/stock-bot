@@ -105,7 +105,8 @@ def check_for_items(content):
     return found_items
 
 @app.route('/webhook/discord', methods=['POST'])
-def discord_webhook():
+@app.route('/webhook/discord/<path:discord_path>', methods=['POST'])
+def discord_webhook(discord_path=None):
     """Обрабатывает вебхук от Discord"""
     try:
         data = request.json
