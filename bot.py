@@ -1,298 +1,282 @@
+from flask import Flask, request, jsonify
 import requests
 import os
 import time
 import json
 from datetime import datetime
 
-def print_header(text):
-    print("\n" + "="*60)
-    print(f" {text}")
-    print("="*60)
+app = Flask(__name__)
 
-def test_channel_access(channel_id, channel_name, token):
-    """Тестирует доступ бота к конкретному каналу"""
-    print(f"\n🔍 Проверяю доступ к каналу: {channel_name}")
-    print(f"   ID канала: {channel_id}")
-    
-    url = f"https://discord.com/api/v10/channels/{channel_id}"
-    headers = {"Authorization": f"Bot {token}"}
+# Telegram настройки
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+TELEGRAM_BOT_CHAT_ID = os.getenv('TELEGRAM_BOT_CHAT_ID')
+TELEGRAM_CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')
+
+# Отслеживаемые предметы
+TARGET_ITEMS = {
+    'octobloom': {
+        'keywords': ['octobloom', 'октоблум', ':octobloom'],
+        'sticker_id': "CAACAgIAAxkBAAEP1btpIXhIEvgVEK4c6ugJv1EgP7UY-wAChokAAtZpCElVMcRUgb_jdDYE",
+        'emoji': '🐙',
+        'display_name': 'Octobloom'
+    },
+    'zebrazinkle': {
+        'keywords': ['zebrazinkle', 'zebra zinkle', ':zebrazinkle'],
+        'sticker_id': "CAACAgIAAxkBAAEPwjJpFDhW_6Vu29vF7DrTHFBcSf_WIAAC1XkAAkCXoUgr50G4SlzwrzYE",
+        'emoji': '🦓',
+        'display_name': 'Zebrazinkle'
+    },
+    'firework_fern': {
+        'keywords': ['firework fern', 'fireworkfern', ':fireworkfern', ':firework_fern:'],
+        'sticker_id': "CAACAgIAAxkBAAEQHChpUBeOda8Uf0Uwig6BwvkW_z1ndAAC5Y0AAl8dgEoandjqAtpRWTYE",
+        'emoji': '🎆',
+        'display_name': 'Firework Fern'
+    }
+}
+
+# Глобальные переменные
+startup_time = datetime.now()
+found_items_count = {name: 0 for name in TARGET_ITEMS.keys()}
+channel_enabled = True
+
+# ==================== TELEGRAM ФУНКЦИИ ====================
+def send_telegram_message(chat_id, text, parse_mode="HTML"):
+    """Отправляет сообщение в Telegram"""
+    if not TELEGRAM_TOKEN or not chat_id:
+        return False
     
     try:
-        response = requests.get(url, headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            channel_data = response.json()
-            print(f"   ✅ УСПЕХ: Бот имеет доступ к каналу!")
-            print(f"   📝 Название канала: {channel_data.get('name', 'неизвестно')}")
-            print(f"   🏷️  Тип: {'текстовый' if channel_data.get('type') == 0 else 'голосовой/другой'}")
-            print(f"   🔒 NSFW: {'Да' if channel_data.get('nsfw', False) else 'Нет'}")
-            return True, channel_data
-            
-        elif response.status_code == 403:
-            print(f"   ❌ ОШИБКА 403: НЕТ ДОСТУПА")
-            print(f"   📌 Возможные причины:")
-            print(f"      • Бот не добавлен на сервер")
-            print(f"      • У бота нет прав на просмотр канала")
-            print(f"      • Канал приватный и бот не добавлен")
-            return False, None
-            
-        elif response.status_code == 404:
-            print(f"   ❌ ОШИБКА 404: КАНАЛ НЕ НАЙДЕН")
-            print(f"   📌 Возможные причины:")
-            print(f"      • Неверный ID канала")
-            print(f"      • Бот не на том сервере")
-            print(f"      • Канал был удалён")
-            return False, None
-            
-        else:
-            print(f"   ⚠️  ОШИБКА {response.status_code}: {response.text[:100]}")
-            return False, None
-            
-    except requests.exceptions.Timeout:
-        print(f"   ⏰ ТАЙМАУТ: Discord не отвечает")
-        return False, None
-    except Exception as e:
-        print(f"   💥 ОШИБКА: {e}")
-        return False, None
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        data = {
+            "chat_id": chat_id,
+            "text": text,
+            "parse_mode": parse_mode,
+            "disable_notification": False
+        }
+        response = requests.post(url, json=data, timeout=10)
+        return response.status_code == 200
+    except:
+        return False
 
-def test_message_reading(channel_id, channel_name, token):
-    """Тестирует возможность чтения сообщений в канале"""
-    print(f"\n📖 Проверяю чтение сообщений в: {channel_name}")
-    
-    url = f"https://discord.com/api/v10/channels/{channel_id}/messages?limit=2"
-    headers = {"Authorization": f"Bot {token}"}
+def send_telegram_sticker(chat_id, sticker_id):
+    """Отправляет стикер в Telegram"""
+    if not TELEGRAM_TOKEN or not chat_id:
+        return False
     
     try:
-        response = requests.get(url, headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            messages = response.json()
-            print(f"   ✅ УСПЕХ: Может читать сообщения!")
-            print(f"   📊 Найдено сообщений: {len(messages)}")
-            
-            if messages:
-                latest_msg = messages[0]
-                author = latest_msg.get('author', {})
-                print(f"   🕐 Последнее сообщение: {author.get('username', 'неизвестно')}")
-                print(f"   📝 Текст: {latest_msg.get('content', 'нет текста')[:50]}...")
-                
-                # Проверяем, есть ли сообщения от Kiro
-                for msg in messages:
-                    author_name = msg.get('author', {}).get('username', '').lower()
-                    if 'kiro' in author_name:
-                        print(f"   🎯 НАЙДЕНО: Сообщение от Kiro!")
-                        return True, messages
-            return True, messages
-            
-        elif response.status_code == 403:
-            print(f"   ❌ ОШИБКА 403: Нет прав на чтение сообщений")
-            return False, None
-            
-        elif response.status_code == 404:
-            print(f"   ❌ ОШИБКА 404: Канал не найден")
-            return False, None
-            
-        else:
-            print(f"   ⚠️  ОШИБКА {response.status_code}")
-            return False, None
-            
-    except Exception as e:
-        print(f"   💥 ОШИБКА: {e}")
-        return False, None
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendSticker"
+        data = {
+            "chat_id": chat_id,
+            "sticker": sticker_id,
+            "disable_notification": True
+        }
+        response = requests.post(url, json=data, timeout=10)
+        return response.status_code == 200
+    except:
+        return False
 
-def test_bot_info(token):
-    """Получает информацию о боте"""
-    print_header("🤖 ИНФОРМАЦИЯ О БОТЕ")
-    
-    url = "https://discord.com/api/v10/users/@me"
-    headers = {"Authorization": f"Bot {token}"}
-    
-    try:
-        response = requests.get(url, headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            bot_data = response.json()
-            print(f"✅ Бот авторизован!")
-            print(f"   👤 Имя: {bot_data.get('username')}#{bot_data.get('discriminator')}")
-            print(f"   🆔 ID: {bot_data.get('id')}")
-            print(f"   🤖 Бот: {'Да' if bot_data.get('bot', False) else 'Нет'}")
-            return True, bot_data
-        else:
-            print(f"❌ Ошибка получения информации: {response.status_code}")
-            return False, None
-    except Exception as e:
-        print(f"💥 Ошибка: {e}")
-        return False, None
+def send_to_bot(text):
+    """Отправляет сообщение в ТЕЛЕГРАМ БОТА"""
+    return send_telegram_message(TELEGRAM_BOT_CHAT_ID, text)
 
-def test_rate_limits(token):
-    """Тестирует лимиты запросов"""
-    print_header("⏱️ ТЕСТ ЛИМИТОВ DISCORD")
+def send_to_channel(sticker_id=None, text=None):
+    """Отправляет в ТЕЛЕГРАМ КАНАЛ"""
+    if not channel_enabled or not TELEGRAM_CHANNEL_ID:
+        return False
     
-    # Делаем несколько быстрых запросов
-    test_channel = "123456789012345678"  # Фейковый ID для теста лимитов
-    
-    for i in range(3):
-        print(f"\n📤 Запрос #{i+1}...")
-        url = f"https://discord.com/api/v10/channels/{test_channel}"
-        headers = {"Authorization": f"Bot {token}"}
-        
-        try:
-            start_time = time.time()
-            response = requests.get(url, headers=headers, timeout=5)
-            end_time = time.time()
-            
-            response_time = (end_time - start_time) * 1000
-            
-            if response.status_code == 404:  # Ожидаем 404 для фейкового канала
-                print(f"   ✅ Ответ за {response_time:.0f} мс: 404 (ожидаемо)")
-            elif response.status_code == 429:
-                retry_after = response.json().get('retry_after', 0)
-                print(f"   ⚠️  ЛИМИТ: {response.status_code}, ждать {retry_after} сек")
-                print(f"   ⏳ Discord лимитирует запросы!")
-                return True
-            else:
-                print(f"   📊 Ответ за {response_time:.0f} мс: {response.status_code}")
-                
-        except requests.exceptions.Timeout:
-            print(f"   ⏰ Таймаут запроса #{i+1}")
-        except Exception as e:
-            print(f"   💥 Ошибка: {e}")
-    
-    print("\n✅ Лимиты Discord в норме")
+    if sticker_id:
+        return send_telegram_sticker(TELEGRAM_CHANNEL_ID, sticker_id)
+    elif text:
+        return send_telegram_message(TELEGRAM_CHANNEL_ID, text)
     return False
 
-def main():
-    print_header("🔧 ТЕСТ ДОСТУПА DISCORD БОТА")
-    print("Проверяем, что новый бот имеет доступ ко всем каналам Kiro")
+# ==================== ОБРАБОТКА WEBHOOK ====================
+def check_for_items(content):
+    """Проверяет есть ли в сообщении отслеживаемые предметы"""
+    content_lower = content.lower()
+    found_items = []
     
-    # Загружаем переменные окружения
-    print("\n📋 ЗАГРУЖАЮ ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ...")
+    for item_name, item_config in TARGET_ITEMS.items():
+        for keyword in item_config['keywords']:
+            if keyword in content_lower:
+                found_items.append(item_name)
+                break
     
-    # Получаем токен из переменных окружения
-    token = os.getenv('DISCORD_TOKEN')
-    
-    if not token:
-        print("❌ ОШИБКА: Переменная DISCORD_TOKEN не установлена!")
-        print("📌 Как установить:")
-        print("   1. В Render.com: Environment → Add Environment Variable")
-        print("   2. Локально: export DISCORD_TOKEN='твой_токен'")
-        print("\nТокен должен выглядеть так: MTIwOTU2NDA0NDcxNDQ1NTY4OA.G1Uy8n...")
-        return
-    
-    print(f"✅ Токен загружен (первые 10 символов): {token[:10]}...")
-    
-    # Получаем ID каналов
-    channels = {
-        "🌱 Семена": os.getenv('SEEDS_CHANNEL_ID'),
-        "🎫 Пасс-шоп": os.getenv('PASS_SHOP_CHANNEL_ID'),
-        "🎪 Ивент-шоп": os.getenv('EVENT_SHOP_CHANNEL_ID')
-    }
-    
-    print("\n📊 ЗАГРУЖЕННЫЕ КАНАЛЫ:")
-    for name, channel_id in channels.items():
-        if channel_id:
-            print(f"   {name}: {channel_id}")
-        else:
-            print(f"   ⚠️  {name}: НЕ УСТАНОВЛЕН")
-    
-    # Тестируем информацию о боте
-    bot_ok, bot_info = test_bot_info(token)
-    if not bot_ok:
-        print("\n❌ БОТ НЕ АВТОРИЗОВАН! Проверь токен.")
-        return
-    
-    # Тестируем доступ к каждому каналу
-    print_header("📡 ПРОВЕРКА ДОСТУПА К КАНАЛАМ")
-    
-    results = {}
-    kiro_found = False
-    
-    for channel_name, channel_id in channels.items():
-        if not channel_id:
-            print(f"\n⚠️  {channel_name}: ID не указан, пропускаю")
-            results[channel_name] = "NO_ID"
-            continue
-        
-        # Тест 1: Доступ к каналу
-        access_ok, channel_data = test_channel_access(channel_id, channel_name, token)
-        
-        if access_ok:
-            # Тест 2: Чтение сообщений
-            read_ok, messages = test_message_reading(channel_id, channel_name, token)
-            
-            if read_ok and messages:
-                # Проверяем сообщения от Kiro
-                for msg in messages:
-                    author = msg.get('author', {})
-                    if 'kiro' in author.get('username', '').lower():
-                        kiro_found = True
-                        print(f"   🎯 ВАЖНО: В канале {channel_name} есть сообщения от Kiro!")
-                        break
-            
-            results[channel_name] = "OK" if read_ok else "NO_READ"
-        else:
-            results[channel_name] = "NO_ACCESS"
-    
-    # Тестируем лимиты Discord
-    print_header("📊 ИТОГИ ПРОВЕРКИ")
-    
-    print("\n🎯 РЕЗУЛЬТАТЫ ПО КАНАЛАМ:")
-    for channel_name, result in results.items():
-        if result == "OK":
-            print(f"   ✅ {channel_name}: Полный доступ и чтение")
-        elif result == "NO_READ":
-            print(f"   ⚠️  {channel_name}: Доступ есть, но нельзя читать")
-        elif result == "NO_ACCESS":
-            print(f"   ❌ {channel_name}: Нет доступа к каналу")
-        elif result == "NO_ID":
-            print(f"   📝 {channel_name}: ID не указан")
-    
-    if kiro_found:
-        print("\n🎯 ОТЛИЧНО: Бот может читать сообщения Kiro!")
-    else:
-        print("\n⚠️  ВНИМАНИЕ: Не найдено сообщений от Kiro в последних сообщениях")
-        print("   Это нормально если Kiro давно не постил")
-    
-    # Тестируем лимиты
-    has_rate_limit = test_rate_limits(token)
-    
-    if has_rate_limit:
-        print("\n🚨 ВНИМАНИЕ: Discord лимитирует запросы!")
-        print("   Нужно увеличить интервалы между запросами")
-    
-    print_header("🎯 РЕКОМЕНДАЦИИ")
-    
-    # Анализируем результаты
-    all_ok = all(r == "OK" for r in results.values() if r != "NO_ID")
-    
-    if all_ok:
-        print("✅ ВСЕ КАНАЛЫ ДОСТУПНЫ! Можно запускать мониторинг.")
-        print("\n🎯 Дальнейшие шаги:")
-        print("   1. Запустить мониторинг с интервалом 30 секунд")
-        print("   2. Следить за логами на ошибки 429")
-        print("   3. Если появятся ошибки - увеличить интервалы")
-    else:
-        print("⚠️  ЕСТЬ ПРОБЛЕМЫ С ДОСТУПОМ!")
-        print("\n🔧 Что делать:")
-        
-        if any(r == "NO_ACCESS" for r in results.values()):
-            print("   1. Проверить что бот добавлен на сервер")
-            print("   2. Проверить права бота на каналах")
-            print("   3. Создать новую invite-ссылку с правами:")
-            print("      • View Channels")
-            print("      • Read Messages")
-            print("      • Read Message History")
-        
-        if any(r == "NO_READ" for r in results.values()):
-            print("   1. Проверить настройки приватности каналов")
-            print("   2. Убедиться что бот добавлен в приватные каналы")
-        
-        if any(r == "NO_ID" for r in results.values()):
-            print("   1. Установить ID недостающих каналов")
-            print("   2. Включить режим разработчика в Discord")
-            print("   3. Правой кнопкой по каналу → Копировать ID")
-    
-    print("\n📅 Время проверки:", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+    return found_items
 
-if __name__ == "__main__":
-    main()
+@app.route('/webhook/discord', methods=['POST'])
+def discord_webhook():
+    """Обрабатывает вебхук от Discord"""
+    try:
+        data = request.json
+        print(f"[WEBHOOK] Получен запрос")
+        
+        # Проверяем что это сообщение
+        if 'content' not in data or 'author' not in data:
+            print(f"[WEBHOOK] Игнорируем: нет content/author")
+            return jsonify({'status': 'ignored'}), 200
+        
+        # Получаем данные
+        author = data.get('author', {})
+        author_name = author.get('username', '').lower()
+        author_bot = author.get('bot', False)
+        content = data.get('content', '')
+        
+        # Проверяем что сообщение от Kiro
+        is_kiro = ('kiro' in author_name) or (author_bot and 'kiro' in str(author))
+        
+        if not is_kiro:
+            print(f"[WEBHOOK] Игнорируем: не Kiro ({author_name})")
+            return jsonify({'status': 'ignored', 'reason': 'not kiro'}), 200
+        
+        print(f"[WEBHOOK] Сообщение от Kiro: {content[:100]}...")
+        
+        # Проверяем на предметы
+        found_items = check_for_items(content)
+        
+        if found_items:
+            current_time = datetime.now().strftime('%H:%M:%S')
+            
+            # Обновляем счётчики
+            for item_name in found_items:
+                found_items_count[item_name] += 1
+            
+            # Формируем сообщение для бота
+            items_list = []
+            for item_name in found_items:
+                item = TARGET_ITEMS[item_name]
+                items_list.append(f"{item['emoji']} {item['display_name']}")
+            
+            bot_message = f"🎯 <b>Найдены предметы в {current_time}</b>\n"
+            bot_message += f"📝 {', '.join(items_list)}\n\n"
+            bot_message += f"<code>{content[:500]}</code>"
+            
+            # Отправляем в бота
+            send_to_bot(bot_message)
+            
+            # Отправляем стикеры в канал
+            for item_name in found_items:
+                item = TARGET_ITEMS[item_name]
+                send_to_channel(sticker_id=item['sticker_id'])
+                time.sleep(1)  # Пауза между стикерами
+            
+            print(f"[WEBHOOK] Отправлены уведомления: {found_items}")
+        
+        return jsonify({'status': 'processed', 'found_items': found_items}), 200
+        
+    except Exception as e:
+        print(f"[WEBHOOK] Ошибка: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# ==================== ВЕБ-ИНТЕРФЕЙС ====================
+@app.route('/')
+def home():
+    uptime = datetime.now() - startup_time
+    
+    items_stats = "\n".join([
+        f"{TARGET_ITEMS[name]['emoji']} {TARGET_ITEMS[name]['display_name']}: {count}"
+        for name, count in found_items_count.items() if count > 0
+    ])
+    
+    return f"""
+    <html>
+        <head>
+            <title>🌱 Webhook мониторинг Kiro</title>
+            <style>
+                body {{ font-family: Arial, sans-serif; margin: 40px; }}
+                .card {{ background: #f5f5f5; padding: 20px; border-radius: 10px; margin: 10px 0; }}
+            </style>
+        </head>
+        <body>
+            <h1>🌱 Discord Webhook мониторинг Kiro</h1>
+            
+            <div class="card">
+                <h3>📊 Статус системы</h3>
+                <p><strong>Время работы:</strong> {str(uptime).split('.')[0]}</p>
+                <p><strong>Канал Telegram:</strong> {'✅ ВКЛЮЧЕН' if channel_enabled else '⏸️ ВЫКЛЮЧЕН'}</p>
+                <p><strong>Webhook URL:</strong> <code>/webhook/discord</code></p>
+            </div>
+            
+            <div class="card">
+                <h3>🎯 Отслеживаемые предметы (3 семена)</h3>
+                <ul>
+                    <li>🐙 Octobloom (octobloom, октоблум)</li>
+                    <li>🦓 Zebrazinkle (zebrazinkle, zebra zinkle)</li>
+                    <li>🎆 Firework Fern (firework fern, fireworkfern)</li>
+                </ul>
+            </div>
+            
+            <div class="card">
+                <h3>🏆 Найдено предметов</h3>
+                <pre>{items_stats if items_stats else "Еще не найдено"}</pre>
+            </div>
+            
+            <div class="card">
+                <h3>🔧 Как работает</h3>
+                <p>1. Discord отправляет ВСЕ сообщения на наш вебхук</p>
+                <p>2. Мы фильтруем только сообщения от Kiro</p>
+                <p>3. Если находим семена - отправляем в Telegram</p>
+                <p>4. <b>Нет лимитов Discord API!</b> 🎉</p>
+            </div>
+        </body>
+    </html>
+    """
+
+@app.route('/enable')
+def enable_channel():
+    global channel_enabled
+    channel_enabled = True
+    return "✅ Канал Telegram включен"
+
+@app.route('/disable')
+def disable_channel():
+    global channel_enabled
+    channel_enabled = False
+    return "⏸️ Канал Telegram выключен"
+
+@app.route('/health')
+def health():
+    return jsonify({
+        'status': 'running',
+        'startup_time': startup_time.isoformat(),
+        'found_items': found_items_count,
+        'channel_enabled': channel_enabled
+    })
+
+# ==================== ЗАПУСК ====================
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 10000))
+    
+    print("=" * 60)
+    print("🚀 Discord Webhook мониторинг Kiro запущен!")
+    print("=" * 60)
+    print("🎯 Отслеживаю 3 семена:")
+    print("   🐙 Octobloom, 🦓 Zebrazinkle, 🎆 Firework Fern")
+    print("🌐 Webhook URL: http://ваш-сервер:{port}/webhook/discord")
+    print("📱 Telegram уведомления: ВКЛЮЧЕНЫ")
+    print("✅ Без лимитов Discord API!")
+    print("=" * 60)
+    
+    # Отправляем уведомление о запуске
+    startup_msg = """
+🚀 <b>Discord Webhook мониторинг запущен!</b>
+
+🎯 <b>Без лимитов Discord API!</b>
+• Discord сам отправляет сообщения
+• Нет токена бота = нет банов
+• Вебхуки на все 3 канала
+
+📊 <b>Отслеживаю 3 семена:</b>
+• 🐙 Octobloom
+• 🦓 Zebrazinkle  
+• 🎆 Firework Fern
+
+🌐 <b>Webhook URL:</b> /webhook/discord
+📱 <b>Telegram:</b> ВКЛЮЧЕН
+
+✅ <b>Готов к работе!</b>
+Discord будет присылать все сообщения, мы отфильтруем только Kiro.
+"""
+    send_to_bot(startup_msg)
+    
+    app.run(host='0.0.0.0', port=port, debug=False)
