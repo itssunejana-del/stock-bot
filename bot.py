@@ -6,7 +6,6 @@ import logging
 import threading
 from datetime import datetime
 import json
-import hashlib
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,9 +23,9 @@ TELEGRAM_BOT_CHAT_ID = os.getenv('TELEGRAM_BOT_CHAT_ID')
 
 # ==================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ====================
 API_URL = "https://gagapi.onrender.com/alldata"
-last_data_hash = None  # Хэш последних данных для сравнения
-last_raw_data = None   # Сырые данные
-check_count = 0        # Счётчик проверок
+last_raw_data = None
+last_data_string = None
+check_count = 0
 bot_start_time = datetime.now()
 
 # ==================== TELEGRAM ФУНКЦИИ ====================
@@ -36,7 +35,8 @@ def send_telegram_message(chat_id, text, parse_mode="HTML"):
         data = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
         response = requests.post(url, json=data, timeout=5)
         return response.status_code == 200
-    except:
+    except Exception as e:
+        logger.error(f"Telegram error: {e}")
         return False
 
 def send_to_channel(text):
@@ -56,7 +56,7 @@ def get_api_data():
         check_count += 1
         logger.info(f"🔍 Проверка #{check_count} API...")
         
-        response = requests.get(API_URL, timeout=10)
+        response = requests.get(API_URL, timeout=15)
         
         if response.status_code != 200:
             logger.error(f"❌ API ошибка: {response.status_code}")
@@ -64,13 +64,19 @@ def get_api_data():
         
         data = response.json()
         
-        # Логируем что получили
+        # Простой лог что получили
         logger.info(f"📦 Получены данные:")
-        logger.info(f"   🕒 Время обновления: {data.get('lastGlobalUpdate', 'нет')}")
-        logger.info(f"   🌱 Семена: {len(data.get('seeds', []))} видов")
-        logger.info(f"   💄 Косметика: {len(data.get('cosmetics', []))} видов")
-        logger.info(f"   🥚 Яйца: {len(data.get('eggs', []))} видов")
-        logger.info(f"   🎪 Ивенты: {len(data.get('events', []))} видов")
+        logger.info(f"   🕒 Время API: {data.get('lastGlobalUpdate', 'нет')}")
+        
+        # Считаем общее количество предметов
+        total_items = 0
+        for category in ['seeds', 'cosmetics', 'eggs', 'events', 'gear', 'honey']:
+            items = data.get(category, [])
+            if items:
+                logger.info(f"   📊 {category}: {len(items)} предметов")
+                total_items += len(items)
+        
+        logger.info(f"   Итого: {total_items} предметов")
         
         return data
         
@@ -78,262 +84,187 @@ def get_api_data():
         logger.error(f"❌ Ошибка запроса: {e}")
         return None
 
-def calculate_data_hash(data):
-    """Создаёт хэш данных для сравнения"""
-    if not data:
-        return None
-    
-    # Создаём строку для хэширования (исключаем timestamp для чистого сравнения)
-    data_str = json.dumps(data, sort_keys=True)
-    return hashlib.md5(data_str.encode()).hexdigest()
-
-def compare_data(old_data, new_data):
-    """Сравнивает два набора данных и возвращает различия"""
+def simple_compare(old_data, new_data):
+    """Простое сравнение данных"""
     if not old_data or not new_data:
-        return "Нет данных для сравнения"
+        return ["Нет данных для сравнения"]
     
     changes = []
     
-    # Сравниваем каждую категорию
-    categories = ['seeds', 'cosmetics', 'eggs', 'events', 'gear', 'honey']
+    # Сравниваем время обновления
+    old_time = old_data.get('lastGlobalUpdate', '')
+    new_time = new_data.get('lastGlobalUpdate', '')
+    
+    if old_time != new_time:
+        changes.append(f"🕒 Время обновления: {old_time} → {new_time}")
+    
+    # Простая проверка: количество предметов в каждой категории
+    categories = ['seeds', 'cosmetics', 'eggs']
     
     for category in categories:
         old_items = old_data.get(category, [])
         new_items = new_data.get(category, [])
         
-        # Преобразуем в словари для сравнения
-        old_dict = {item.get('name', ''): item.get('quantity', 0) for item in old_items}
-        new_dict = {item.get('name', ''): item.get('quantity', 0) for item in new_items}
+        if len(old_items) != len(new_items):
+            changes.append(f"📊 {category}: было {len(old_items)}, стало {len(new_items)}")
         
-        # Все уникальные имена
-        all_names = set(list(old_dict.keys()) + list(new_dict.keys()))
-        
-        for name in all_names:
-            old_qty = old_dict.get(name, 0)
-            new_qty = new_dict.get(name, 0)
+        # Простая проверка помидоров
+        if category == 'seeds':
+            old_tomatoes = sum(1 for s in old_items if 'tomato' in s.get('name', '').lower())
+            new_tomatoes = sum(1 for s in new_items if 'tomato' in s.get('name', '').lower())
             
-            if old_qty != new_qty:
-                if old_qty == 0 and new_qty > 0:
-                    changes.append(f"➕ {category}: {name} ПОЯВИЛСЯ ({new_qty} шт)")
-                elif new_qty == 0 and old_qty > 0:
-                    changes.append(f"➖ {category}: {name} ЗАКОНЧИЛСЯ (было {old_qty} шт)")
-                else:
-                    changes.append(f"📊 {category}: {name} {old_qty} → {new_qty} шт")
-    
-    # Время обновления
-    old_time = old_data.get('lastGlobalUpdate', 'нет')
-    new_time = new_data.get('lastGlobalUpdate', 'нет')
-    
-    if old_time != new_time:
-        changes.append(f"🕒 Время обновления API: {old_time} → {new_time}")
+            if old_tomatoes != new_tomatoes:
+                changes.append(f"🍅 Помидоров: было {old_tomatoes}, стало {new_tomatoes}")
     
     return changes
 
 # ==================== МОНИТОРИНГ ====================
 def monitor_api():
-    """Основной цикл мониторинга ВСЕХ данных"""
-    global last_data_hash, last_raw_data
+    """Основной цикл мониторинга"""
+    global last_raw_data, last_data_string
     
-    logger.info("🚀 Запуск мониторинга ВСЕХ данных игры")
+    logger.info("🚀 Запуск простого мониторинга API")
     
     # Первая проверка
     initial_data = get_api_data()
     if initial_data:
         last_raw_data = initial_data
-        last_data_hash = calculate_data_hash(initial_data)
-        logger.info("✅ Первые данные получены и сохранены")
+        last_data_string = json.dumps(initial_data, sort_keys=True)
+        logger.info("✅ Первые данные получены")
     
-    check_interval = 60  # 1 минута - безопасно
+    check_interval = 60  # 1 минута
     
     while True:
         try:
             # Получаем новые данные
             new_data = get_api_data()
             
-            if new_data:
-                # Сравниваем с предыдущими
-                new_hash = calculate_data_hash(new_data)
+            if new_data and last_data_string:
+                # Простое сравнение строк
+                new_data_string = json.dumps(new_data, sort_keys=True)
                 
-                if last_data_hash and new_hash != last_data_hash:
-                    # НАШЛИ ИЗМЕНЕНИЯ!
-                    logger.info("🎯 ОБНАРУЖЕНЫ ИЗМЕНЕНИЯ В ДАННЫХ!")
+                if new_data_string != last_data_string:
+                    # Нашли изменения!
+                    logger.info("🎯 ОБНАРУЖЕНЫ ИЗМЕНЕНИЯ!")
                     
                     # Анализируем что изменилось
-                    changes = compare_data(last_raw_data, new_data)
+                    changes = simple_compare(last_raw_data, new_data)
                     
-                    # Формируем сообщение
+                    # Формируем простое сообщение
                     if changes:
-                        message_lines = ["🔔 <b>ИЗМЕНЕНИЯ В ИГРЕ:</b>"]
-                        for change in changes[:10]:  # Первые 10 изменений
+                        message_lines = ["🔔 <b>ИЗМЕНЕНИЯ В ДАННЫХ API:</b>"]
+                        for change in changes:
                             message_lines.append(f"• {change}")
                         
-                        if len(changes) > 10:
-                            message_lines.append(f"... и ещё {len(changes) - 10} изменений")
-                        
                         message_lines.append("")
+                        message_lines.append(f"⏰ Проверка: {check_count}")
                         message_lines.append(f"🕒 Время: {datetime.now().strftime('%H:%M:%S')}")
-                        message_lines.append(f"📡 API обновлён: {new_data.get('lastGlobalUpdate', 'нет')}")
                         
                         message = "\n".join(message_lines)
                         
                         # Отправляем в канал
-                        send_to_channel(message)
-                        logger.info(f"📢 Отправлено уведомление о {len(changes)} изменениях")
+                        if send_to_channel(message):
+                            logger.info(f"📢 Отправлено уведомление")
+                        else:
+                            logger.error("❌ Не удалось отправить в Telegram")
                     
                     # Обновляем сохранённые данные
-                    last_data_hash = new_hash
+                    last_data_string = new_data_string
                     last_raw_data = new_data
                 else:
                     logger.info("📭 Изменений нет")
+            elif new_data:
+                # Первые данные
+                last_data_string = json.dumps(new_data, sort_keys=True)
+                last_raw_data = new_data
             
             # Ждём перед следующей проверкой
-            logger.info(f"⏳ Следующая проверка через {check_interval} секунд...")
             time.sleep(check_interval)
             
         except Exception as e:
-            logger.error(f"💥 Ошибка в мониторинге: {e}")
+            logger.error(f"💥 Ошибка: {e}")
             time.sleep(30)
 
 # ==================== ВЕБ-ИНТЕРФЕЙС ====================
 @app.route('/')
 def home():
-    """Главная страница с текущими данными"""
+    """Простая главная страница"""
     
-    # Текущая статистика
+    status = "🟢 Работает" if last_raw_data else "🟡 Загрузка..."
+    
     if last_raw_data:
-        seeds = last_raw_data.get('seeds', [])
-        tomatoes = next((s for s in seeds if 'tomato' in s.get('name', '').lower()), None)
-        tomato_count = tomatoes.get('quantity', 0) if tomatoes else 0
-        
-        status_html = f"""
-        <div style="background:#f0f8ff;padding:20px;border-radius:10px;margin:20px 0;">
-            <h2>📊 Текущие данные из игры</h2>
-            <p>🕒 Последнее обновление API: {last_raw_data.get('lastGlobalUpdate', 'нет')}</p>
-            <p>🍅 Помидоров в игре: {tomato_count} шт</p>
-            <p>🌱 Всего семян: {len(seeds)} видов</p>
-            <p>💄 Косметики: {len(last_raw_data.get('cosmetics', []))} видов</p>
-            <p>🔍 Проверок: {check_count}</p>
-            <p>⏰ Работает: {(datetime.now() - bot_start_time).total_seconds()/3600:.1f} ч</p>
-        </div>
-        
-        <div style="background:#fff3cd;padding:20px;border-radius:10px;margin:20px 0;">
-            <h3>🎯 Примеры семян:</h3>
-            <pre style="max-height:200px;overflow:auto;">
-{json.dumps(seeds[:10], indent=2, ensure_ascii=False) if seeds else 'Нет данных'}
-            </pre>
-        </div>
-        """
+        update_time = last_raw_data.get('lastGlobalUpdate', 'нет')
+        seeds_count = len(last_raw_data.get('seeds', []))
     else:
-        status_html = "<p style='color:red;'>❌ Данные ещё не получены</p>"
+        update_time = "нет данных"
+        seeds_count = 0
     
     return f"""
     <html>
     <head>
-        <title>🎮 Мониторинг ВСЕХ данных игры</title>
+        <title>API Мониторинг</title>
         <meta charset="utf-8">
         <style>
-            body {{ font-family: Arial, sans-serif; margin: 40px; }}
-            .card {{ background: white; padding: 20px; border-radius: 10px; margin: 20px 0; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }}
-            button {{ padding: 10px 20px; background: #4CAF50; color: white; border: none; border-radius: 5px; cursor: pointer; }}
-            button:hover {{ background: #45a049; }}
+            body {{ font-family: Arial; margin: 20px; }}
+            .info {{ background: #f0f0f0; padding: 15px; border-radius: 5px; }}
         </style>
     </head>
     <body>
-        <h1>🎮 Мониторинг ВСЕХ данных игры</h1>
+        <h1>🔍 Мониторинг данных игры</h1>
         
-        {status_html}
-        
-        <div class="card">
-            <h3>⚡ Как работает:</h3>
-            <ol>
-                <li>Запрашивает <b>ВСЕ данные</b> из API каждую минуту</li>
-                <li>Сравнивает с предыдущими данными</li>
-                <li>Отправляет уведомление при <b>ЛЮБОМ изменении</b></li>
-                <li>Показывает что вообще происходит в игре</li>
-            </ol>
-            <p><b>Цель:</b> понять, обновляется ли API вообще</p>
+        <div class="info">
+            <p><b>Статус:</b> {status}</p>
+            <p><b>Проверок:</b> {check_count}</p>
+            <p><b>Время API:</b> {update_time}</p>
+            <p><b>Семян в игре:</b> {seeds_count} видов</p>
+            <p><b>Работает:</b> {(datetime.now() - bot_start_time).total_seconds()/60:.0f} мин</p>
         </div>
         
-        <div class="card">
-            <h3>🔧 Тестирование:</h3>
-            <button onclick="checkNow()">🔄 Проверить сейчас</button>
-            <button onclick="viewRawData()">📄 Показать сырые данные</button>
-            <div id="result" style="margin-top:10px;"></div>
-        </div>
+        <p><a href="/data">Посмотреть данные</a> | <a href="/check">Проверить сейчас</a></p>
         
-        <script>
-            function checkNow() {{
-                fetch('/check')
-                    .then(r => r.json())
-                    .then(data => {{
-                        document.getElementById('result').innerHTML = 
-                            `<p>✅ Проверено. Хэш данных: ${data.hash?.substring(0, 8) || 'нет'}</p>`;
-                    }});
-            }}
-            
-            function viewRawData() {{
-                fetch('/raw')
-                    .then(r => r.text())
-                    .then(text => {{
-                        document.getElementById('result').innerHTML = 
-                            `<pre style="max-height:300px;overflow:auto;">${{text}}</pre>`;
-                    }});
-            }}
-        </script>
+        <h3>Как работает:</h3>
+        <ul>
+            <li>Проверяет API каждую минуту</li>
+            <li>Сравнивает с предыдущими данными</li>
+            <li>Отправляет уведомления об изменениях</li>
+        </ul>
     </body>
     </html>
     """
+
+@app.route('/data')
+def show_data():
+    """Показывает сырые данные"""
+    if last_raw_data:
+        return f"<pre>{json.dumps(last_raw_data, indent=2, ensure_ascii=False)}</pre>"
+    return "Нет данных"
 
 @app.route('/check')
 def check_now():
     """Принудительная проверка"""
     data = get_api_data()
-    current_hash = calculate_data_hash(data) if data else None
     return jsonify({
-        'status': 'checked',
-        'hash': current_hash,
-        'check_count': check_count,
-        'timestamp': datetime.now().isoformat()
+        'checked': data is not None,
+        'check_number': check_count,
+        'time': datetime.now().isoformat()
     })
-
-@app.route('/raw')
-def raw_data():
-    """Сырые данные API"""
-    if last_raw_data:
-        return json.dumps(last_raw_data, indent=2, ensure_ascii=False)
-    return "Нет данных"
 
 # ==================== ЗАПУСК ====================
 if __name__ == '__main__':
-    logger.info("=" * 60)
-    logger.info("🎮 ЗАПУСК МОНИТОРИНГА ВСЕХ ДАННЫХ ИГРЫ")
-    logger.info("=" * 60)
-    logger.info("📡 API: https://gagapi.onrender.com/alldata")
-    logger.info("⏰ Интервал: 60 секунд")
-    logger.info("🎯 Цель: отследить ЛЮБЫЕ изменения в данных")
-    logger.info("=" * 60)
+    logger.info("=" * 50)
+    logger.info("🔍 ЗАПУСК ПРОСТОГО МОНИТОРИНГА API")
+    logger.info("=" * 50)
     
     # Запускаем мониторинг
-    monitor_thread = threading.Thread(target=monitor_api, daemon=True)
-    monitor_thread.start()
-    logger.info("✅ Мониторинг запущен")
+    thread = threading.Thread(target=monitor_api, daemon=True)
+    thread.start()
     
     # Сообщение о запуске
-    startup_msg = (
-        "🎮 <b>МОНИТОРИНГ ВСЕХ ДАННЫХ ЗАПУЩЕН</b>\n\n"
-        "📡 <b>Что делаю:</b>\n"
-        "• Запрашиваю ВСЕ данные из игры каждую минуту\n"
-        "• Сравниваю с предыдущими данными\n"
-        "• Отправляю уведомление при ЛЮБОМ изменении\n\n"
-        "🎯 <b>Цель:</b>\n"
-        "Узнать, обновляется ли API вообще\n"
-        "Что меняется в данных игры\n"
-        "Как часто происходят изменения\n\n"
-        "✅ <b>Когда данные в игре изменятся</b> - вы получите уведомление!"
-    )
-    send_to_bot(startup_msg)
+    try:
+        send_to_bot("🔍 <b>Мониторинг API запущен</b>\nПроверяю данные каждую минуту...")
+    except:
+        pass
     
     # Запускаем Flask
     port = int(os.getenv('PORT', 10000))
-    logger.info(f"🌐 Веб-сервер на порту {port}")
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
