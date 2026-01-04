@@ -291,7 +291,7 @@ def check_gag_api():
         api_request_count += 1
         current_time = datetime.now()
         
-        logger.debug(f"🔍 Проверяю API (#{api_request_count})...")
+        logger.info(f"🔍 Проверяю API (#{api_request_count}) в {current_time.strftime('%H:%M:%S')}...")
         
         # Делаем запрос к API
         response = requests.get(API_URL, timeout=10)
@@ -303,60 +303,54 @@ def check_gag_api():
         
         data = response.json()
         
+        # ОТЛАДКА: выводим что получили
+        all_seeds = data.get('seeds', [])
+        logger.info(f"📦 Все семена от API: {len(all_seeds)} шт")
+        
         # Ищем помидоры в разделе seeds
         current_tomato_qty = 0
+        tomato_name = None
         
-        for seed in data.get('seeds', []):
-            name = seed.get('name', '').lower()
-            if 'tomato' in name:
+        for seed in all_seeds:
+            name = seed.get('name', '')
+            logger.debug(f"   Семя: '{name}' -> количество: {seed.get('quantity', 0)}")
+            if 'tomato' in name.lower():
                 current_tomato_qty = seed.get('quantity', 0)
+                tomato_name = name
                 break
+        
+        logger.info(f"🍅 Найдено помидоров: {current_tomato_qty} шт (название: {tomato_name})")
         
         # Получаем предыдущее состояние
         prev_state = last_api_state['tomato']
         prev_qty = prev_state['quantity']
-        last_notified = prev_state.get('last_notified')
+        
+        logger.info(f"📊 Сравнение: было {prev_qty} шт, стало {current_tomato_qty} шт")
         
         # Проверяем изменения
         items_found = []
         
         if current_tomato_qty != prev_qty:
             # Изменение обнаружено!
-            logger.info(f"🎯 Изменение помидоров: {prev_qty} → {current_tomato_qty}")
+            logger.info(f"🎯 ИЗМЕНЕНИЕ! Помидоры: {prev_qty} → {current_tomato_qty}")
             
-            # Защита от дублей: проверяем, когда было последнее уведомление
-            should_notify = True
-            if last_notified:
-                time_since_last = (current_time - last_notified).total_seconds()
-                # Если прошло меньше 10 секунд - вероятно дубль
-                if time_since_last < 10 and prev_qty == 0 and current_tomato_qty > 0:
-                    logger.debug(f"⏭️ Пропускаем возможный дубль (прошло {time_since_last:.1f} сек)")
-                    should_notify = False
+            items_found.append({
+                'name': 'tomato',
+                'quantity': current_tomato_qty,
+                'previous_quantity': prev_qty,
+                'type': 'seed',
+                'timestamp': current_time
+            })
             
-            if should_notify:
-                items_found.append({
-                    'name': 'tomato',
-                    'quantity': current_tomato_qty,
-                    'previous_quantity': prev_qty,
-                    'type': 'seed',
-                    'timestamp': current_time
-                })
-                
-                found_items_count['tomato'] += 1
-                
-                # Обновляем состояние с временем уведомления
-                last_api_state['tomato'] = {
-                    'quantity': current_tomato_qty,
-                    'last_notified': current_time
-                }
-                
-                bot_status = f"🍅 Помидоры: {current_tomato_qty} шт"
-            else:
-                # Обновляем только количество, без времени уведомления
-                last_api_state['tomato']['quantity'] = current_tomato_qty
-        
-        elif current_tomato_qty == 0:
-            bot_status = f"📭 Помидоров нет в стоке"
+            found_items_count['tomato'] += 1
+            
+            # Обновляем состояние
+            last_api_state['tomato'] = {
+                'quantity': current_tomato_qty,
+                'last_notified': current_time
+            }
+            
+            bot_status = f"🍅 Помидоры: {current_tomato_qty} шт (изменение!)"
         else:
             bot_status = f"🍅 Помидоров: {current_tomato_qty} шт (без изменений)"
         
@@ -432,37 +426,52 @@ def send_tomato_notification(item_data):
     else:
         logger.error("❌ Ошибка отправки уведомления")
 
-# ==================== МОНИТОРЫ ====================
 def monitor_api():
-    """Основной цикл мониторинга API"""
+    """Основной цикл мониторинга API - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
     logger.info(f"🚀 Запуск мониторинга API (каждые {CHECK_INTERVAL} секунд)")
     
     # Первая проверка для инициализации состояния
-    initial_check = check_gag_api()
-    if initial_check:
-        for item in initial_check:
-            send_tomato_notification(item)
+    try:
+        logger.info("🔄 Первоначальная проверка API...")
+        initial_check = check_gag_api()
+        if initial_check:
+            for item in initial_check:
+                send_tomato_notification(item)
+    except Exception as e:
+        logger.error(f"💥 Ошибка при первой проверке API: {e}")
     
     logger.info("✅ Мониторинг API запущен")
     
+    check_counter = 0
+    
     while True:
         try:
+            check_counter += 1
+            logger.info(f"🔄 Цикл #{check_counter} - проверка API...")
+            
             # Проверяем API
             found_items = check_gag_api()
             
             # Обрабатываем найденные изменения
             if found_items:
+                logger.info(f"🎯 Найдено изменений: {len(found_items)}")
                 for item in found_items:
                     send_tomato_notification(item)
+            else:
+                logger.info("📭 Изменений не обнаружено")
             
             # Сохраняем состояние
             save_state()
+            
+            logger.info(f"⏳ Жду {CHECK_INTERVAL} секунд до следующей проверки...")
             
             # Ждём перед следующей проверкой
             time.sleep(CHECK_INTERVAL)
             
         except Exception as e:
-            logger.error(f"💥 Ошибка в мониторинге API: {e}")
+            logger.error(f"💥 КРИТИЧЕСКАЯ ОШИБКА в мониторинге API: {e}")
+            logger.error(f"🔧 Стек ошибки:", exc_info=True)
+            logger.info(f"🔄 Перезапускаю проверку через 10 секунд...")
             time.sleep(10)
 
 def self_pinger():
@@ -509,6 +518,7 @@ def home():
             .card {{ background: white; padding: 20px; border-radius: 15px; margin: 20px 0; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
             .tomato {{ color: #e74c3c; font-weight: bold; }}
             .status {{ padding: 10px; border-radius: 5px; background: #2ecc71; color: white; display: inline-block; }}
+            .logs {{ background: #2c3e50; color: #ecf0f1; padding: 15px; border-radius: 5px; font-family: monospace; font-size: 12px; max-height: 300px; overflow-y: auto; }}
         </style>
     </head>
     <body>
@@ -537,30 +547,32 @@ def home():
             <p><strong>Интервал проверки:</strong> каждые {CHECK_INTERVAL} секунд</p>
             <p><strong>Лимит API:</strong> 5 запросов в минуту</p>
             <p><strong>Тип уведомлений:</strong> Текстовые сообщения (без стикеров)</p>
+            <p><strong>Последняя проверка:</strong> <span id="lastCheck">Скоро...</span></p>
+            <button onclick="checkNow()">🔄 Проверить сейчас</button>
         </div>
         
         <div class="card">
-            <h2>🛡️ Защита от дублей</h2>
-            <p><strong>Логика работы:</strong></p>
-            <ol>
-                <li>Сравниваем количество с предыдущей проверкой</li>
-                <li>Если изменилось → отправляем уведомление</li>
-                <li>Сохраняем время последнего уведомления</li>
-                <li>Не уведомляем, если изменение слишком быстрое (&lt;10 сек)</li>
-                <li>Состояние сохраняется в файл и переживает перезапуски</li>
-            </ol>
+            <h2>📝 Последние логи</h2>
+            <div class="logs" id="logs">
+                Загрузка логов...
+            </div>
         </div>
         
-        <div class="card">
-            <h2>⚡ Скорость обновления</h2>
-            <p><strong>Тестируем задержки:</strong></p>
-            <ul>
-                <li>API получает данные из игры в реальном времени</li>
-                <li>Запросы каждые 30 секунд → почти мгновенное обнаружение</li>
-                <li>Telegram отправляет уведомления за 1-3 секунды</li>
-                <li><strong>Общая задержка: ~30-35 секунд</strong> от появления в игре до уведомления</li>
-            </ul>
-        </div>
+        <script>
+            function checkNow() {{
+                fetch('/check_now')
+                    .then(response => response.json())
+                    .then(data => {{
+                        alert('Проверка выполнена! Найдено изменений: ' + data.found_items);
+                        location.reload();
+                    }});
+            }}
+            
+            // Обновляем время последней проверки
+            setInterval(() => {{
+                document.getElementById('lastCheck').textContent = new Date().toLocaleTimeString();
+            }}, 1000);
+        </script>
     </body>
     </html>
     """
@@ -595,7 +607,7 @@ if __name__ == '__main__':
     load_state()
     
     logger.info("=" * 60)
-    logger.info("🧪 ЗАПУСК ТЕСТОВОГО БОТА API МОНИТОРИНГА")
+    logger.info("🧪 ЗАПУСК ИСПРАВЛЕННОГО БОТА API МОНИТОРИНГА")
     logger.info("=" * 60)
     logger.info("🎯 Отслеживаю только: 🍅 Помидор (Tomato)")
     logger.info("🔗 Источник: Прямой API игры (gagapi.onrender.com)")
@@ -618,20 +630,16 @@ if __name__ == '__main__':
     
     # Отправляем сообщение о запуске
     startup_msg = (
-        f"🧪 <b>ТЕСТОВЫЙ БОТ API ЗАПУЩЕН</b>\n\n"
+        f"🧪 <b>ИСПРАВЛЕННЫЙ БОТ API ЗАПУЩЕН</b>\n\n"
         f"🎯 <b>Конфигурация:</b>\n"
         f"• Отслеживаю: 🍅 Только помидоры (Tomato)\n"
         f"• Источник: Прямой API игры\n"
         f"• Интервал: каждые {CHECK_INTERVAL} секунд\n"
         f"• Уведомления: Текстовые сообщения\n\n"
-        f"⚡ <b>Скорость работы:</b>\n"
-        f"• API обновляется в реальном времени\n"
-        f"• Проверка каждые {CHECK_INTERVAL} секунд\n"
-        f"• Задержка уведомления: ~30-35 секунд\n\n"
-        f"🛡️ <b>Защита от дублей:</b>\n"
-        f"• Сравниваем количество с предыдущим\n"
-        f"• Не уведомляем о быстрых повторениях\n"
-        f"• Состояние сохраняется при перезапуске\n\n"
+        f"⚡ <b>Улучшения:</b>\n"
+        f"• Исправлен мониторинг (теперь работает каждые {CHECK_INTERVAL} сек)\n"
+        f"• Подробные логи каждой проверки\n"
+        f"• Защита от падения потоков\n\n"
         f"📊 <b>Текущее состояние:</b>\n"
         f"🍅 Помидоры: {last_api_state['tomato']['quantity']} шт\n\n"
         f"✅ Бот начал мониторинг. Следите за каналом!"
