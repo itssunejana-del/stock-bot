@@ -5,9 +5,7 @@ import time
 import logging
 import threading
 from datetime import datetime, timedelta
-import re
 import json
-import sys
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,628 +22,284 @@ TELEGRAM_CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')
 TELEGRAM_BOT_CHAT_ID = os.getenv('TELEGRAM_BOT_CHAT_ID')
 RENDER_SERVICE_URL = os.getenv('RENDER_SERVICE_URL', 'https://stock-bot-cj4s.onrender.com')
 
-# Проверка переменных
-REQUIRED_VARS = ['TELEGRAM_TOKEN', 'TELEGRAM_CHANNEL_ID', 'TELEGRAM_BOT_CHAT_ID']
-missing = [var for var in REQUIRED_VARS if not os.getenv(var)]
-if missing:
-    logger.error(f"❌ Отсутствуют переменные: {missing}")
-
-# ==================== ОТСЛЕЖИВАЕМЫЕ ПРЕДМЕТЫ ====================
-TARGET_ITEMS = {
-    # 🍅 Только помидоры для теста
-    'tomato': {
-        'keywords': ['tomato', 'томат', 'помидор'],
-        'display_name': '🍅 Помидор',
-        'type': 'seed'
-    }
-}
-
 # ==================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ====================
-# API конфигурация
 API_URL = "https://gagapi.onrender.com/alldata"
-CHECK_INTERVAL = 30  # секунд (2 запроса в минуту, лимит API - 5 запросов)
+CHECK_INTERVAL = 30  # секунд
 
-# Хранилище последнего состояния
-last_api_state = {
-    'tomato': {'quantity': 0, 'last_notified': None}
-}
-
-# Статистика
+# Хранилище последнего состояния ВСЕХ семян
+last_all_seeds = {}
 bot_start_time = datetime.now()
-bot_status = "🟢 Инициализация через API"
 api_request_count = 0
-ping_count = 0
-last_ping_time = None
-found_items_count = {'tomato': 0}
-telegram_offset = 0
 last_error = None
-
-# Файл для сохранения состояния
-STATE_FILE = 'api_state.json'
-
-# ==================== СОХРАНЕНИЕ СОСТОЯНИЯ ====================
-def save_state():
-    """Сохраняет состояние в файл"""
-    try:
-        state = {
-            'last_api_state': last_api_state,
-            'found_items_count': found_items_count,
-            'api_request_count': api_request_count,
-            'ping_count': ping_count,
-            'bot_status': bot_status
-        }
-        
-        with open(STATE_FILE, 'w') as f:
-            json.dump(state, f, default=str)
-        
-        logger.debug("💾 Состояние API сохранено")
-    except Exception as e:
-        logger.error(f"❌ Ошибка сохранения состояния: {e}")
-
-def load_state():
-    """Загружает состояние из файла"""
-    global last_api_state, found_items_count, api_request_count, ping_count, bot_status
-    
-    try:
-        if os.path.exists(STATE_FILE):
-            with open(STATE_FILE, 'r') as f:
-                state = json.load(f)
-            
-            last_api_state = state.get('last_api_state', last_api_state)
-            found_items_count = state.get('found_items_count', found_items_count)
-            api_request_count = state.get('api_request_count', api_request_count)
-            ping_count = state.get('ping_count', ping_count)
-            bot_status = state.get('bot_status', bot_status)
-            
-            logger.info("💾 Состояние API загружено")
-    except Exception as e:
-        logger.error(f"❌ Ошибка загрузки состояния: {e}")
 
 # ==================== TELEGRAM ФУНКЦИИ ====================
 def send_telegram_message(chat_id, text, parse_mode="HTML", disable_notification=False):
-    """Отправляет сообщение в Telegram"""
     if not TELEGRAM_TOKEN or not chat_id:
-        logger.error("❌ Не настроены Telegram переменные")
         return False
-    
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        data = {
-            "chat_id": chat_id,
-            "text": text,
-            "parse_mode": parse_mode,
-            "disable_notification": disable_notification
-        }
+        data = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
         response = requests.post(url, json=data, timeout=10)
-        
-        if response.status_code == 200:
-            return True
-        elif response.status_code == 429:
-            retry_after = response.json().get('parameters', {}).get('retry_after', 30)
-            logger.warning(f"⚠️ Лимит Telegram, жду {retry_after} сек")
-            time.sleep(retry_after)
-            return False
-        else:
-            logger.error(f"❌ Ошибка Telegram {response.status_code}: {response.text[:200]}")
-            return False
-    except Exception as e:
-        logger.error(f"❌ Ошибка отправки в Telegram: {e}")
+        return response.status_code == 200
+    except:
         return False
 
-def send_to_bot(text, disable_notification=False):
-    """Отправляет сообщение в ТЕЛЕГРАМ БОТА"""
-    if not TELEGRAM_BOT_CHAT_ID:
-        return False
-    return send_telegram_message(TELEGRAM_BOT_CHAT_ID, text, disable_notification=disable_notification)
+def send_to_bot(text):
+    if TELEGRAM_BOT_CHAT_ID:
+        return send_telegram_message(TELEGRAM_BOT_CHAT_ID, text)
 
-def send_to_channel(text, disable_notification=True):
-    """Отправляет сообщение в канал"""
-    if not TELEGRAM_CHANNEL_ID:
-        return False
-    return send_telegram_message(TELEGRAM_CHANNEL_ID, text, disable_notification=disable_notification)
+def send_to_channel(text):
+    if TELEGRAM_CHANNEL_ID:
+        return send_telegram_message(TELEGRAM_CHANNEL_ID, text, disable_notification=True)
 
-def handle_telegram_command(chat_id, command, message=None):
-    """Обрабатывает команды Telegram"""
-    logger.info(f"🎯 Обрабатываю команду: {command} от {chat_id}")
-    
-    if command == '/start':
-        welcome_text = (
-            "🧪 <b>ТЕСТОВЫЙ БОТ API МОНИТОРИНГА</b>\n\n"
-            "Я отслеживаю только 🍅 <b>помидоры</b> через прямой API игры.\n\n"
-            "📊 <b>Текущая конфигурация:</b>\n"
-            "• Отслеживаю: 🍅 Томаты (Tomato)\n"
-            "• Источник: Прямой API игры (gagapi.onrender.com)\n"
-            "• Интервал: Каждые 30 секунд\n"
-            "• Уведомления: Текстовые (без стикеров)\n\n"
-            f"📈 <b>Статистика:</b>\n"
-            f"• Запросов к API: {api_request_count}\n"
-            f"• Найдено помидоров: {found_items_count['tomato']}\n\n"
-            "🎛️ <b>Команды:</b>\n"
-            "/start - Эта информация\n"
-            "/status - Подробный статус\n"
-            "/test - Тестовое уведомление\n"
-            "/check - Принудительная проверка API"
-        )
-        send_telegram_message(chat_id, welcome_text)
-        
-    elif command == '/status':
-        uptime = datetime.now() - bot_start_time
-        hours = uptime.total_seconds() / 3600
-        
-        tomato_state = last_api_state['tomato']
-        last_notified = tomato_state['last_notified']
-        last_notified_str = last_notified.strftime('%H:%M:%S') if last_notified else "никогда"
-        
-        status_text = (
-            f"📊 <b>СТАТУС ТЕСТОВОГО БОТА API</b>\n\n"
-            f"🟢 {bot_status}\n"
-            f"⏰ Время работы: {hours:.1f} часов\n"
-            f"📅 Запущен: {bot_start_time.strftime('%d.%m.%Y %H:%M')}\n\n"
-            f"🎯 <b>Отслеживаемый предмет:</b>\n"
-            f"🍅 Помидор (Tomato)\n\n"
-            f"📡 <b>API Статистика:</b>\n"
-            f"• Запросов к API: {api_request_count}\n"
-            f"• Интервал проверки: {CHECK_INTERVAL} секунд\n"
-            f"• Последнее количество: {tomato_state['quantity']} шт\n"
-            f"• Последнее уведомление: {last_notified_str}\n"
-            f"• Всего найдено раз: {found_items_count['tomato']}\n\n"
-            f"🔗 <b>Источник данных:</b>\n"
-            f"• API: {API_URL}\n"
-            f"• Обновление: в реальном времени\n"
-            f"• Лимит: 5 запросов/минуту\n\n"
-            f"📝 <b>Логика работы:</b>\n"
-            f"1. Запрашиваем /alldata каждые {CHECK_INTERVAL} сек\n"
-            f"2. Ищем Tomato в разделе seeds\n"
-            f"3. Сравниваем количество с предыдущим\n"
-            f"4. Если изменилось → отправляем уведомление\n"
-            f"5. Защита от дублей: не уведомляем если количество не изменилось"
-        )
-        
-        if last_error:
-            status_text += f"\n\n⚠️ <b>Последняя ошибка:</b>\n<code>{last_error}</code>"
-        
-        send_telegram_message(chat_id, status_text)
-        
-    elif command == '/test':
-        test_msg = (
-            f"🧪 <b>ТЕСТОВОЕ УВЕДОМЛЕНИЕ</b>\n\n"
-            f"Это тестовое сообщение от бота API мониторинга.\n"
-            f"Время: {datetime.now().strftime('%H:%M:%S')}\n"
-            f"Если вы видите это, бот работает корректно!"
-        )
-        send_telegram_message(chat_id, test_msg)
-        
-    elif command == '/check':
-        # Принудительная проверка
-        items_found = check_gag_api()
-        if items_found:
-            msg = f"✅ Проверка API выполнена. Найдено изменений: {len(items_found)}"
-        else:
-            msg = "ℹ️ Проверка API выполнена. Изменений не обнаружено."
-        send_telegram_message(chat_id, msg)
-        
-    else:
-        send_telegram_message(chat_id, "❌ Неизвестная команда. Используйте /start для списка команд.")
-
-def telegram_poller():
-    """Опросщик Telegram команд"""
-    global telegram_offset
-    
-    logger.info("🔍 Запускаю Telegram поллер...")
-    
-    time.sleep(10)
-    telegram_offset = 0
-    
-    while True:
-        try:
-            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/getUpdates"
-            params = {
-                'offset': telegram_offset + 1,
-                'timeout': 10,
-                'limit': 1
-            }
-            
-            response = requests.get(url, params=params, timeout=15)
-            
-            if response.status_code == 200:
-                data = response.json()
-                
-                if data.get('ok') and data.get('result'):
-                    updates = data['result']
-                    
-                    for update in updates:
-                        telegram_offset = update['update_id']
-                        
-                        if 'message' in update:
-                            message = update['message']
-                            chat_id = message['chat']['id']
-                            text = message.get('text', '')
-                            
-                            if text.startswith('/'):
-                                handle_telegram_command(chat_id, text)
-                
-                time.sleep(5)
-                
-            elif response.status_code == 409:
-                logger.warning("⚠️ Конфликт с другим экземпляром. Жду 60 секунд...")
-                time.sleep(60)
-            else:
-                logger.error(f"❌ Ошибка Telegram API: {response.status_code}")
-                time.sleep(10)
-            
-        except requests.exceptions.Timeout:
-            continue
-        except Exception as e:
-            logger.error(f"💥 Ошибка в телеграм поллере: {e}")
-            time.sleep(10)
-
-# ==================== API МОНИТОРИНГ ====================
-def check_gag_api():
-    """
-    Проверяет API на наличие изменений в помидорах
-    Возвращает список найденных изменений
-    """
-    global api_request_count, last_error, bot_status, found_items_count
+# ==================== ОСНОВНАЯ ПРОВЕРКА ====================
+def check_all_seeds():
+    """Проверяет ВСЕ семена из API"""
+    global api_request_count, last_error, last_all_seeds
     
     try:
         api_request_count += 1
         current_time = datetime.now()
         
-        logger.info(f"🔍 Проверяю API (#{api_request_count}) в {current_time.strftime('%H:%M:%S')}...")
+        logger.info(f"🔍 Проверка #{api_request_count} в {current_time.strftime('%H:%M:%S')}")
         
-        # Делаем запрос к API
         response = requests.get(API_URL, timeout=10)
         
         if response.status_code != 200:
             last_error = f"API ошибка {response.status_code}"
             logger.error(f"❌ {last_error}")
-            return []
+            return None
         
         data = response.json()
+        current_seeds = {}
         
-        # ОТЛАДКА: выводим что получили
-        all_seeds = data.get('seeds', [])
-        logger.info(f"📦 Все семена от API: {len(all_seeds)} шт")
+        # Получаем ВСЕ семена
+        for seed in data.get('seeds', []):
+            name = seed.get('name', 'Без названия')
+            quantity = seed.get('quantity', 0)
+            current_seeds[name] = quantity
         
-        # Ищем помидоры в разделе seeds
-        current_tomato_qty = 0
-        tomato_name = None
+        logger.info(f"📊 Всего семян: {len(current_seeds)} видов")
         
-        for seed in all_seeds:
-            name = seed.get('name', '')
-            logger.debug(f"   Семя: '{name}' -> количество: {seed.get('quantity', 0)}")
-            if 'tomato' in name.lower():
-                current_tomato_qty = seed.get('quantity', 0)
-                tomato_name = name
-                break
+        # Логируем все семена для отладки
+        for name, qty in current_seeds.items():
+            logger.info(f"   {name}: {qty} шт")
         
-        logger.info(f"🍅 Найдено помидоров: {current_tomato_qty} шт (название: {tomato_name})")
+        return current_seeds
         
-        # Получаем предыдущее состояние
-        prev_state = last_api_state['tomato']
-        prev_qty = prev_state['quantity']
-        
-        logger.info(f"📊 Сравнение: было {prev_qty} шт, стало {current_tomato_qty} шт")
-        
-        # Проверяем изменения
-        items_found = []
-        
-        if current_tomato_qty != prev_qty:
-            # Изменение обнаружено!
-            logger.info(f"🎯 ИЗМЕНЕНИЕ! Помидоры: {prev_qty} → {current_tomato_qty}")
-            
-            items_found.append({
-                'name': 'tomato',
-                'quantity': current_tomato_qty,
-                'previous_quantity': prev_qty,
-                'type': 'seed',
-                'timestamp': current_time
-            })
-            
-            found_items_count['tomato'] += 1
-            
-            # Обновляем состояние
-            last_api_state['tomato'] = {
-                'quantity': current_tomato_qty,
-                'last_notified': current_time
-            }
-            
-            bot_status = f"🍅 Помидоры: {current_tomato_qty} шт (изменение!)"
-        else:
-            bot_status = f"🍅 Помидоров: {current_tomato_qty} шт (без изменений)"
-        
-        last_error = None
-        return items_found
-        
-    except requests.exceptions.Timeout:
-        last_error = "Таймаут запроса к API"
-        logger.warning("⏰ Таймаут API")
-        return []
-    except requests.exceptions.RequestException as e:
-        last_error = f"Ошибка запроса: {e}"
-        logger.error(f"❌ Ошибка API запроса: {e}")
-        return []
     except Exception as e:
-        last_error = f"Неизвестная ошибка: {e}"
-        logger.error(f"💥 Неизвестная ошибка API: {e}")
-        return []
+        last_error = str(e)
+        logger.error(f"💥 Ошибка: {e}")
+        return None
 
-def send_tomato_notification(item_data):
-    """Отправляет уведомление о помидорах"""
-    quantity = item_data['quantity']
-    prev_qty = item_data['previous_quantity']
-    timestamp = item_data['timestamp']
+def compare_seeds(old_seeds, new_seeds):
+    """Сравнивает два состояния семян и возвращает изменения"""
+    changes = []
+    
+    if not old_seeds or not new_seeds:
+        return changes
+    
+    # Все имена семян
+    all_names = set(list(old_seeds.keys()) + list(new_seeds.keys()))
+    
+    for name in all_names:
+        old_qty = old_seeds.get(name, 0)
+        new_qty = new_seeds.get(name, 0)
+        
+        if old_qty != new_qty:
+            changes.append({
+                'name': name,
+                'old': old_qty,
+                'new': new_qty,
+                'change': new_qty - old_qty
+            })
+    
+    return changes
+
+def send_seed_report(all_seeds, changes=None):
+    """Отправляет отчет о всех семенах"""
+    if not all_seeds:
+        return
+    
+    # Сортируем по количеству (от большего к меньшему)
+    sorted_seeds = sorted(all_seeds.items(), key=lambda x: x[1], reverse=True)
     
     # Формируем сообщение
-    if prev_qty == 0 and quantity > 0:
-        # Появились в стоке
-        message = (
-            f"🎯 <b>ПОМИДОРЫ ПОЯВИЛИСЬ!</b>\n\n"
-            f"🍅 <b>Томаты (Tomato)</b>\n"
-            f"📦 Количество: <b>{quantity} шт</b>\n"
-            f"🕒 Время: {timestamp.strftime('%H:%M:%S')}\n\n"
-            f"✅ Быстро проверьте игру!"
-        )
-    elif quantity > prev_qty:
-        # Количество увеличилось
-        message = (
-            f"📈 <b>БОЛЬШЕ ПОМИДОРОВ!</b>\n\n"
-            f"🍅 <b>Томаты (Tomato)</b>\n"
-            f"📦 Было: {prev_qty} шт\n"
-            f"📦 Стало: <b>{quantity} шт</b>\n"
-            f"🔼 Добавилось: {quantity - prev_qty} шт\n"
-            f"🕒 Время: {timestamp.strftime('%H:%M:%S')}"
-        )
-    elif quantity < prev_qty:
-        # Количество уменьшилось
-        message = (
-            f"📉 <b>МЕНЬШЕ ПОМИДОРОВ!</b>\n\n"
-            f"🍅 <b>Томаты (Tomato)</b>\n"
-            f"📦 Было: {prev_qty} шт\n"
-            f"📦 Стало: <b>{quantity} шт</b>\n"
-            f"🔽 Убавилось: {prev_qty - quantity} шт\n"
-            f"🕒 Время: {timestamp.strftime('%H:%M:%S')}\n\n"
-            f"⚡ Кто-то купил!"
-        )
-    else:
-        # На всякий случай
-        message = (
-            f"ℹ️ <b>ИЗМЕНЕНИЕ ПОМИДОРОВ</b>\n\n"
-            f"🍅 Количество: {quantity} шт\n"
-            f"🕒 Время: {timestamp.strftime('%H:%M:%S')}"
-        )
+    report_lines = []
+    report_lines.append("📊 <b>ВСЕ СЕМЕНА В ИГРЕ:</b>")
+    report_lines.append("")
     
-    # Отправляем в канал (текстовое сообщение)
+    for name, qty in sorted_seeds:
+        if qty > 0:
+            report_lines.append(f"🌱 <b>{name}</b>: {qty} шт")
+        else:
+            report_lines.append(f"⭕ {name}: {qty} шт")
+    
+    if changes:
+        report_lines.append("")
+        report_lines.append("🔄 <b>ИЗМЕНЕНИЯ:</b>")
+        for change in changes:
+            if change['change'] > 0:
+                report_lines.append(f"📈 {change['name']}: {change['old']} → {change['new']} (+{change['change']})")
+            else:
+                report_lines.append(f"📉 {change['name']}: {change['old']} → {change['new']} ({change['change']})")
+    
+    report_lines.append("")
+    report_lines.append(f"⏰ {datetime.now().strftime('%H:%M:%S')}")
+    
+    message = "\n".join(report_lines)
+    
+    # Отправляем в канал
     success = send_to_channel(message)
     
-    # Также отправляем в бота для логов
-    send_to_bot(f"🍅 Уведомление отправлено в канал: {quantity} шт")
-    
     if success:
-        logger.info(f"📢 Уведомление отправлено: помидоры {quantity} шт")
+        logger.info(f"📢 Отчет отправлен: {len(all_seeds)} семян")
     else:
-        logger.error("❌ Ошибка отправки уведомления")
+        logger.error("❌ Ошибка отправки отчета")
 
-def monitor_api():
-    """Основной цикл мониторинга API - ИСПРАВЛЕННАЯ ВЕРСИЯ"""
-    logger.info(f"🚀 Запуск мониторинга API (каждые {CHECK_INTERVAL} секунд)")
+# ==================== МОНИТОРИНГ ====================
+def monitor_all_seeds():
+    """Мониторит ВСЕ семена"""
+    global last_all_seeds
     
-    # Первая проверка для инициализации состояния
-    try:
-        logger.info("🔄 Первоначальная проверка API...")
-        initial_check = check_gag_api()
-        if initial_check:
-            for item in initial_check:
-                send_tomato_notification(item)
-    except Exception as e:
-        logger.error(f"💥 Ошибка при первой проверке API: {e}")
+    logger.info("🚀 Запуск мониторинга ВСЕХ семян")
     
-    logger.info("✅ Мониторинг API запущен")
+    # Первая проверка
+    current_seeds = check_all_seeds()
+    if current_seeds:
+        last_all_seeds = current_seeds
+        send_seed_report(current_seeds)
     
     check_counter = 0
     
     while True:
         try:
             check_counter += 1
-            logger.info(f"🔄 Цикл #{check_counter} - проверка API...")
             
-            # Проверяем API
-            found_items = check_gag_api()
+            # Проверяем
+            current_seeds = check_all_seeds()
             
-            # Обрабатываем найденные изменения
-            if found_items:
-                logger.info(f"🎯 Найдено изменений: {len(found_items)}")
-                for item in found_items:
-                    send_tomato_notification(item)
-            else:
-                logger.info("📭 Изменений не обнаружено")
+            if current_seeds:
+                # Сравниваем с предыдущим состоянием
+                changes = compare_seeds(last_all_seeds, current_seeds)
+                
+                if changes:
+                    logger.info(f"🎯 Найдено изменений: {len(changes)}")
+                    # Отправляем отчет только если есть изменения
+                    send_seed_report(current_seeds, changes)
+                    last_all_seeds = current_seeds
+                else:
+                    logger.info("📭 Изменений нет")
             
-            # Сохраняем состояние
-            save_state()
-            
-            logger.info(f"⏳ Жду {CHECK_INTERVAL} секунд до следующей проверки...")
-            
-            # Ждём перед следующей проверкой
             time.sleep(CHECK_INTERVAL)
             
         except Exception as e:
-            logger.error(f"💥 КРИТИЧЕСКАЯ ОШИБКА в мониторинге API: {e}")
-            logger.error(f"🔧 Стек ошибки:", exc_info=True)
-            logger.info(f"🔄 Перезапускаю проверку через 10 секунд...")
+            logger.error(f"💥 Ошибка: {e}")
             time.sleep(10)
 
-def self_pinger():
-    """Самопинг чтобы Render не останавливал сервис"""
-    global ping_count, last_ping_time
+# ==================== ТЕСТОВЫЕ КОМАНДЫ ====================
+def test_direct_api():
+    """Тестирует прямое обращение к разным API"""
+    test_urls = [
+        "https://gagapi.onrender.com/seeds",
+        "https://gagapi.onrender.com/alldata",
+        "https://gagapi.onrender.com/gear"
+    ]
     
-    logger.info("🏓 Запуск самопинга (каждые 8 минут)")
+    results = []
     
-    time.sleep(30)
-    
-    while True:
+    for url in test_urls:
         try:
-            ping_count += 1
-            last_ping_time = datetime.now()
-            logger.info(f"🏓 Самопинг #{ping_count}...")
-            
-            response = requests.get(f"{RENDER_SERVICE_URL}/", timeout=10)
+            logger.info(f"🧪 Тестирую {url}")
+            response = requests.get(url, timeout=10)
             if response.status_code == 200:
-                logger.info("✅ Самопинг успешен")
+                data = response.json()
+                results.append(f"✅ {url}: {len(data) if isinstance(data, list) else 'JSON получен'}")
             else:
-                logger.warning(f"⚠️ Самопинг: статус {response.status_code}")
+                results.append(f"❌ {url}: ошибка {response.status_code}")
         except Exception as e:
-            logger.error(f"❌ Ошибка самопинга: {e}")
-        
-        time.sleep(480)  # 8 минут
+            results.append(f"💥 {url}: {e}")
+    
+    return results
 
 # ==================== ВЕБ-ИНТЕРФЕЙС ====================
 @app.route('/')
 def home():
-    uptime = datetime.now() - bot_start_time
-    uptime_str = str(uptime).split('.')[0]
-    
-    tomato_state = last_api_state['tomato']
-    last_notified = tomato_state['last_notified']
-    last_notified_str = last_notified.strftime('%H:%M:%S') if last_notified else "никогда"
+    tomato_qty = last_all_seeds.get('Tomato', 0) if last_all_seeds else 0
     
     return f"""
     <html>
-    <head>
-        <title>🧪 Тестовый бот API мониторинга</title>
-        <meta charset="utf-8">
-        <style>
-            body {{ font-family: Arial, sans-serif; margin: 40px; background: #f0f8ff; }}
-            .card {{ background: white; padding: 20px; border-radius: 15px; margin: 20px 0; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
-            .tomato {{ color: #e74c3c; font-weight: bold; }}
-            .status {{ padding: 10px; border-radius: 5px; background: #2ecc71; color: white; display: inline-block; }}
-            .logs {{ background: #2c3e50; color: #ecf0f1; padding: 15px; border-radius: 5px; font-family: monospace; font-size: 12px; max-height: 300px; overflow-y: auto; }}
-        </style>
-    </head>
+    <head><title>Мониторинг всех семян</title><meta charset="utf-8"></head>
     <body>
-        <h1>🧪 Тестовый бот API мониторинга</h1>
+        <h1>🧪 Мониторинг ВСЕХ семян</h1>
         
-        <div class="card">
-            <h2>🎯 Отслеживаемый предмет</h2>
-            <p class="tomato">🍅 Помидор (Tomato)</p>
-            <p><strong>Текущее количество:</strong> <span class="tomato">{tomato_state['quantity']} шт</span></p>
-            <p><strong>Последнее уведомление:</strong> {last_notified_str}</p>
-            <p><strong>Всего найдено раз:</strong> {found_items_count['tomato']}</p>
+        <div style="background:#f0f8ff; padding:20px; border-radius:10px; margin:20px 0;">
+            <h3>🎯 Текущее состояние</h3>
+            <p><b>Запросов к API:</b> {api_request_count}</p>
+            <p><b>Помидоры:</b> {tomato_qty} шт</p>
+            <p><b>Всего семян:</b> {len(last_all_seeds) if last_all_seeds else 0} видов</p>
+            <p><b>Интервал:</b> {CHECK_INTERVAL} секунд</p>
         </div>
         
-        <div class="card">
-            <h2>📊 Статистика системы</h2>
-            <p><strong>Статус:</strong> <span class="status">{bot_status}</span></p>
-            <p><strong>Время работы:</strong> {uptime_str}</p>
-            <p><strong>Запросов к API:</strong> {api_request_count}</p>
-            <p><strong>Самопингов:</strong> {ping_count}</p>
-            <p><strong>Запущен:</strong> {bot_start_time.strftime('%d.%m.%Y %H:%M:%S')}</p>
+        <div style="background:#fff3cd; padding:20px; border-radius:10px; margin:20px 0;">
+            <h3>🔍 Тестирование API</h3>
+            <p>Если API не обновляется, проблема в источнике данных.</p>
+            <p>Попробуйте:</p>
+            <ul>
+                <li><a href="/test" target="_blank">Протестировать все эндпоинты API</a></li>
+                <li><a href="/check" target="_blank">Принудительно проверить семена</a></li>
+                <li><a href="/debug" target="_blank">Получить сырые данные API</a></li>
+            </ul>
         </div>
         
-        <div class="card">
-            <h2>🔗 Источник данных</h2>
-            <p><strong>API URL:</strong> {API_URL}</p>
-            <p><strong>Интервал проверки:</strong> каждые {CHECK_INTERVAL} секунд</p>
-            <p><strong>Лимит API:</strong> 5 запросов в минуту</p>
-            <p><strong>Тип уведомлений:</strong> Текстовые сообщения (без стикеров)</p>
-            <p><strong>Последняя проверка:</strong> <span id="lastCheck">Скоро...</span></p>
-            <button onclick="checkNow()">🔄 Проверить сейчас</button>
+        <div style="background:#e7f3ff; padding:20px; border-radius:10px; margin:20px 0;">
+            <h3>📊 Последние семена</h3>
+            <pre>{json.dumps(last_all_seeds, indent=2, ensure_ascii=False) if last_all_seeds else 'Нет данных'}</pre>
         </div>
-        
-        <div class="card">
-            <h2>📝 Последние логи</h2>
-            <div class="logs" id="logs">
-                Загрузка логов...
-            </div>
-        </div>
-        
-        <script>
-            function checkNow() {{
-                fetch('/check_now')
-                    .then(response => response.json())
-                    .then(data => {{
-                        alert('Проверка выполнена! Найдено изменений: ' + data.found_items);
-                        location.reload();
-                    }});
-            }}
-            
-            // Обновляем время последней проверки
-            setInterval(() => {{
-                document.getElementById('lastCheck').textContent = new Date().toLocaleTimeString();
-            }}, 1000);
-        </script>
     </body>
     </html>
     """
 
-@app.route('/check_now')
-def check_now():
-    """Принудительная проверка API"""
-    items = check_gag_api()
-    return jsonify({
-        'status': 'checked',
-        'found_items': len(items),
-        'tomato_quantity': last_api_state['tomato']['quantity'],
-        'timestamp': datetime.now().isoformat()
-    })
+@app.route('/test')
+def test_page():
+    """Тестирует API"""
+    results = test_direct_api()
+    return "<br>".join(results)
 
-@app.route('/status')
-def status_api():
-    """API статуса"""
-    return jsonify({
-        'status': 'running',
-        'bot_status': bot_status,
-        'tomato': last_api_state['tomato'],
-        'api_request_count': api_request_count,
-        'found_items_count': found_items_count,
-        'uptime_seconds': (datetime.now() - bot_start_time).total_seconds(),
-        'check_interval': CHECK_INTERVAL,
-        'last_ping': last_ping_time.isoformat() if last_ping_time else None
-    })
+@app.route('/check')
+def check_page():
+    """Принудительная проверка"""
+    current_seeds = check_all_seeds()
+    if current_seeds:
+        changes = compare_seeds(last_all_seeds, current_seeds)
+        send_seed_report(current_seeds, changes)
+        return f"✅ Проверено. Изменений: {len(changes)}"
+    return "❌ Ошибка проверки"
+
+@app.route('/debug')
+def debug_page():
+    """Показывает сырые данные API"""
+    try:
+        response = requests.get(API_URL, timeout=10)
+        return f"<pre>{json.dumps(response.json(), indent=2, ensure_ascii=False)}</pre>"
+    except Exception as e:
+        return f"❌ Ошибка: {e}"
 
 # ==================== ЗАПУСК ====================
 if __name__ == '__main__':
-    load_state()
-    
     logger.info("=" * 60)
-    logger.info("🧪 ЗАПУСК ИСПРАВЛЕННОГО БОТА API МОНИТОРИНГА")
-    logger.info("=" * 60)
-    logger.info("🎯 Отслеживаю только: 🍅 Помидор (Tomato)")
-    logger.info("🔗 Источник: Прямой API игры (gagapi.onrender.com)")
-    logger.info(f"⏰ Интервал проверки: каждые {CHECK_INTERVAL} секунд")
-    logger.info("📢 Уведомления: Текстовые сообщения")
-    logger.info("🛡️ Защита от дублей: включена")
-    logger.info("💾 Сохранение состояния: включено")
+    logger.info("🌱 ЗАПУСК МОНИТОРИНГА ВСЕХ СЕМЯН")
     logger.info("=" * 60)
     
-    threads = [
-        threading.Thread(target=monitor_api, name='ApiMonitor', daemon=True),
-        threading.Thread(target=self_pinger, name='SelfPinger', daemon=True),
-        threading.Thread(target=telegram_poller, name='TelegramPoller', daemon=True)
-    ]
+    # Запускаем мониторинг в отдельном потоке
+    monitor_thread = threading.Thread(target=monitor_all_seeds, daemon=True)
+    monitor_thread.start()
     
-    for thread in threads:
-        thread.start()
-        logger.info(f"✅ Запущен поток: {thread.name}")
-        time.sleep(1)
+    # Запускаем Flask
+    port = int(os.getenv('PORT', 10000))
+    logger.info(f"🌐 Веб-сервер на порту {port}")
     
-    # Отправляем сообщение о запуске
-    startup_msg = (
-        f"🧪 <b>ИСПРАВЛЕННЫЙ БОТ API ЗАПУЩЕН</b>\n\n"
-        f"🎯 <b>Конфигурация:</b>\n"
-        f"• Отслеживаю: 🍅 Только помидоры (Tomato)\n"
-        f"• Источник: Прямой API игры\n"
-        f"• Интервал: каждые {CHECK_INTERVAL} секунд\n"
-        f"• Уведомления: Текстовые сообщения\n\n"
-        f"⚡ <b>Улучшения:</b>\n"
-        f"• Исправлен мониторинг (теперь работает каждые {CHECK_INTERVAL} сек)\n"
-        f"• Подробные логи каждой проверки\n"
-        f"• Защита от падения потоков\n\n"
-        f"📊 <b>Текущее состояние:</b>\n"
-        f"🍅 Помидоры: {last_api_state['tomato']['quantity']} шт\n\n"
-        f"✅ Бот начал мониторинг. Следите за каналом!"
-    )
-    send_to_bot(startup_msg)
+    # Отправляем тестовое сообщение
+    send_to_bot("🌱 Бот мониторинга всех семян запущен!")
     
-    port = int(os.environ.get('PORT', 10000))
-    logger.info(f"🌐 Веб-сервер запущен на порту {port}")
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
