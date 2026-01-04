@@ -7,98 +7,206 @@ import time
 from datetime import datetime
 import logging
 import os
+from collections import defaultdict
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+# ==================== КОНФИГУРАЦИЯ ====================
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
+TELEGRAM_CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')
+TELEGRAM_BOT_CHAT_ID = os.getenv('TELEGRAM_BOT_CHAT_ID')
+
+# WebSocket URL с нового сервера
+WEBSOCKET_URL = "wss://websocket.joshlei.com/growagarden?user_id=monitor_bot"
+
+# Отслеживаемые предметы
+TARGET_ITEMS = {
+    'octobloom': {'keywords': ['octobloom'], 'display_name': '🐙 Octobloom'},
+    'zebrazinkle': {'keywords': ['zebrazinkle', 'zebra zinkle'], 'display_name': '🦓 Zebrazinkle'},
+    'firework_fern': {'keywords': ['firework fern', 'fireworkfern'], 'display_name': '🎆 Firework Fern'},
+    'tomato': {'keywords': ['tomato'], 'display_name': '🍅 Tomato'}
+}
+
 # ==================== ГЛОБАЛЬНЫЕ ДАННЫЕ ====================
 game_data = {
-    'all_messages': [],           # ВСЕ сообщения
-    'message_types': {},          # Статистика по типам
-    'last_update': None,
-    'connected': False,
-    'total_received': 0,
-    'last_stock_data': None,      # Последние данные стока
-    'last_weather_data': None,    # Последние данные погоды
-    'collection_start': datetime.now()
+    'last_stock': {},          # Последние данные по секциям
+    'last_update': None,       # Время последнего обновления
+    'connected': False,        # Статус подключения
+    'total_updates': 0,        # Всего обновлений
+    'found_items': [],         # Найденные целевые предметы
+    'stock_history': []        # История изменений
 }
+
+# ==================== TELEGRAM ФУНКЦИИ ====================
+def send_telegram_message(chat_id, text, parse_mode="HTML"):
+    try:
+        import requests
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        data = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+        response = requests.post(url, json=data, timeout=5)
+        return response.status_code == 200
+    except:
+        return False
+
+def send_to_channel(text):
+    if TELEGRAM_CHANNEL_ID:
+        return send_telegram_message(TELEGRAM_CHANNEL_ID, text)
+
+def send_to_bot(text):
+    if TELEGRAM_BOT_CHAT_ID:
+        return send_telegram_message(TELEGRAM_BOT_CHAT_ID, text)
+
+# ==================== ОБРАБОТКА ДАННЫХ ====================
+def check_for_target_items(new_stock_data):
+    """Ищет целевые предметы в новых данных"""
+    found_items = []
+    
+    # Проверяем секцию семян
+    if 'SEED_STOCK' in new_stock_data:
+        for seed in new_stock_data['SEED_STOCK']:
+            seed_name = seed.get('display_name', '').lower()
+            quantity = seed.get('quantity', 0)
+            
+            for item_id, config in TARGET_ITEMS.items():
+                for keyword in config['keywords']:
+                    if keyword in seed_name and quantity > 0:
+                        found_items.append({
+                            'id': item_id,
+                            'name': seed_name,
+                            'display_name': config['display_name'],
+                            'quantity': quantity,
+                            'section': 'SEED_STOCK'
+                        })
+    
+    # Также проверяем другие секции если нужно
+    sections_to_check = ['COSMETIC_STOCK', 'EGG_STOCK', 'GEAR_STOCK', 'EVENTSHOP_STOCK']
+    
+    for section in sections_to_check:
+        if section in new_stock_data:
+            for item in new_stock_data[section]:
+                item_name = item.get('display_name', '').lower()
+                quantity = item.get('quantity', 0)
+                
+                # Здесь можно добавить проверку для других категорий
+    
+    return found_items
+
+def compare_stocks(old_stock, new_stock):
+    """Сравнивает два состояния стока"""
+    changes = []
+    
+    # Сравниваем каждую секцию
+    all_sections = set(list(old_stock.keys()) + list(new_stock.keys()))
+    
+    for section in all_sections:
+        old_items = old_stock.get(section, [])
+        new_items = new_stock.get(section, [])
+        
+        # Преобразуем в словари для сравнения
+        old_dict = {item.get('display_name', '').lower(): item.get('quantity', 0) for item in old_items}
+        new_dict = {item.get('display_name', '').lower(): item.get('quantity', 0) for item in new_items}
+        
+        # Все уникальные имена
+        all_names = set(list(old_dict.keys()) + list(new_dict.keys()))
+        
+        for name in all_names:
+            old_qty = old_dict.get(name, 0)
+            new_qty = new_dict.get(name, 0)
+            
+            if old_qty != new_qty:
+                changes.append({
+                    'section': section,
+                    'name': name,
+                    'old': old_qty,
+                    'new': new_qty,
+                    'change': new_qty - old_qty
+                })
+    
+    return changes
 
 # ==================== WEB SOCKET КЛИЕНТ ====================
 async def websocket_client():
-    """Собирает ВСЕ данные из игры"""
-    uri = "wss://ws.growagardenpro.com/"
+    """Подключается к новому WebSocket серверу"""
     
-    logger.info(f"🎮 Подключаюсь к игре: {uri}")
+    logger.info(f"🔗 Подключаюсь к: {WEBSOCKET_URL}")
     
     while True:
         try:
-            async with websockets.connect(uri) as websocket:
+            async with websockets.connect(
+                WEBSOCKET_URL,
+                ping_interval=30,
+                ping_timeout=10
+            ) as websocket:
                 game_data['connected'] = True
-                logger.info("✅ ПОДКЛЮЧЕН! Начинаю сбор ВСЕХ данных...")
+                logger.info("✅ УСПЕШНОЕ ПОДКЛЮЧЕНИЕ! Жду обновлений...")
+                send_to_bot("🎮 <b>Подключился к игре!</b>\nОжидаю обновлений стока...")
                 
-                async for message in websocket:
+                while True:
                     try:
+                        # Получаем сообщение
+                        raw_message = await websocket.recv()
+                        data = json.loads(raw_message)
                         timestamp = datetime.now()
-                        raw_message = message
                         
-                        # Сохраняем сырое сообщение
-                        game_data['total_received'] += 1
                         game_data['last_update'] = timestamp
+                        game_data['total_updates'] += 1
                         
-                        # Парсим JSON
-                        try:
-                            data = json.loads(raw_message)
-                            msg_type = data.get('type', 'unknown')
+                        # Логируем получение
+                        if game_data['total_updates'] % 10 == 0:
+                            sections = list(data.keys())
+                            logger.info(f"📨 Обновление #{game_data['total_updates']}. Секции: {sections}")
+                        
+                        # Сохраняем текущий сток
+                        current_stock = {}
+                        for section, items in data.items():
+                            current_stock[section.upper()] = items
+                        
+                        # Сравниваем с предыдущим
+                        if game_data['last_stock']:
+                            changes = compare_stocks(game_data['last_stock'], current_stock)
                             
-                            # Обновляем статистику
-                            game_data['message_types'][msg_type] = game_data['message_types'].get(msg_type, 0) + 1
-                            
-                            # Сохраняем полные данные
-                            message_record = {
-                                'timestamp': timestamp.isoformat(),
-                                'type': msg_type,
-                                'data': data,
-                                'raw_length': len(raw_message)
-                            }
-                            game_data['all_messages'].append(message_record)
-                            
-                            # Сохраняем последние данные по категориям
-                            if msg_type == 'stock_update' and 'data' in data:
-                                game_data['last_stock_data'] = {
-                                    'timestamp': timestamp,
-                                    'data': data['data']
-                                }
-                                logger.info(f"📦 Stock update: {len(data['data'].get('seeds', []))} семян")
+                            if changes:
+                                logger.info(f"🎯 Найдено изменений: {len(changes)}")
                                 
-                            elif msg_type == 'weather_update' and 'data' in data:
-                                game_data['last_weather_data'] = {
-                                    'timestamp': timestamp,
-                                    'data': data['data']
-                                }
-                                logger.info(f"🌤️ Weather update: {data['data'].get('type', 'unknown')}")
-                            
-                            # Логируем каждые 10 сообщений
-                            if game_data['total_received'] % 10 == 0:
-                                logger.info(f"📨 Сообщений: {game_data['total_received']}, "
-                                          f"Типы: {dict(sorted(game_data['message_types'].items()))}")
+                                # Ищем целевые предметы
+                                new_items = check_for_target_items(current_stock)
                                 
-                        except json.JSONDecodeError:
-                            logger.warning(f"⚠️ Невалидный JSON ({len(raw_message)} chars)")
-                            game_data['all_messages'].append({
-                                'timestamp': timestamp.isoformat(),
-                                'type': 'invalid_json',
-                                'raw': raw_message[:200] + '...' if len(raw_message) > 200 else raw_message
+                                if new_items:
+                                    for item in new_items:
+                                        message = (
+                                            f"🎯 <b>НАЙДЕН ПРЕДМЕТ!</b>\n\n"
+                                            f"{item['display_name']}\n"
+                                            f"📦 Количество: {item['quantity']} шт\n"
+                                            f"📂 Раздел: {item['section']}\n"
+                                            f"🕒 Время: {timestamp.strftime('%H:%M:%S')}\n\n"
+                                            f"⚡ Скорее в игру!"
+                                        )
+                                        send_to_channel(message)
+                                        logger.info(f"📢 Отправлено: {item['display_name']}")
+                        
+                        # Обновляем последний сток
+                        game_data['last_stock'] = current_stock
+                        
+                        # Сохраняем в историю (первые 50 записей)
+                        if len(game_data['stock_history']) < 50:
+                            game_data['stock_history'].append({
+                                'timestamp': timestamp,
+                                'data_summary': {k: len(v) for k, v in current_stock.items()}
                             })
-                            
+                        
+                    except json.JSONDecodeError:
+                        logger.warning("⚠️ Невалидный JSON от сервера")
                     except Exception as e:
-                        logger.error(f"❌ Ошибка обработки сообщения: {e}")
+                        logger.error(f"❌ Ошибка обработки: {e}")
                 
-        except websockets.exceptions.ConnectionClosed:
+        except (websockets.exceptions.ConnectionClosedError, websockets.exceptions.ConnectionClosedOK) as e:
             game_data['connected'] = False
-            logger.warning("🔌 Соединение разорвано. Переподключение через 5 сек...")
+            logger.warning(f"🔌 Соединение разорвано: {e}. Переподключение через 5 сек...")
             await asyncio.sleep(5)
+            
         except Exception as e:
             game_data['connected'] = False
             logger.error(f"❌ Ошибка подключения: {e}")
@@ -111,125 +219,95 @@ def run_websocket():
 # ==================== ВЕБ-ИНТЕРФЕЙС ====================
 @app.route('/')
 def home():
-    """Главная страница - показывает ВСЕ собранные данные"""
+    """Главная страница"""
     
     status = "🟢 ПОДКЛЮЧЕН" if game_data['connected'] else "🔴 ОТКЛЮЧЕН"
+    last_update = game_data['last_update']
+    update_str = last_update.strftime('%H:%M:%S') if last_update else "никогда"
     
-    uptime = datetime.now() - game_data['collection_start']
-    uptime_str = str(uptime).split('.')[0]
-    
-    # Статистика
-    total_messages = game_data['total_received']
-    message_types = game_data['message_types']
-    
-    # Примеры последних сообщений
-    recent_messages = game_data['all_messages'][-5:] if game_data['all_messages'] else []
-    
-    # Данные стока если есть
-    stock_info = ""
-    if game_data['last_stock_data']:
-        stock = game_data['last_stock_data']['data']
-        categories = ['seeds', 'cosmetics', 'eggs', 'gear', 'honey', 'events']
-        stock_info = "<h3>📊 Последний сток:</h3>"
-        for cat in categories:
-            if cat in stock:
-                stock_info += f"<p><b>{cat}:</b> {len(stock[cat])} предметов</p>"
+    # Статистика по секциям
+    sections_info = ""
+    if game_data['last_stock']:
+        for section, items in game_data['last_stock'].items():
+            sections_info += f"<li><b>{section}</b>: {len(items)} предметов</li>"
     
     return f"""
     <html>
-    <head>
-        <title>🎮 Сбор ВСЕХ данных игры</title>
-        <meta charset="utf-8">
-        <style>
-            body {{ font-family: Arial; margin: 40px; }}
-            .card {{ background: #f5f5f5; padding: 20px; border-radius: 10px; margin: 20px 0; }}
-            .message {{ background: white; padding: 10px; margin: 5px 0; border-left: 4px solid #4CAF50; }}
-        </style>
-    </head>
-    <body>
-        <h1>🎮 Сбор ВСЕХ данных из Grow a Garden</h1>
+    <head><title>🎮 Прямой мониторинг (новый сервер)</title></head>
+    <body style="margin:40px;font-family:Arial;">
+        <h1>🎮 Прямой мониторинг Grow a Garden</h1>
+        <h3>🔗 Новый WebSocket сервер</h3>
         
-        <div class="card">
+        <div style="background:#f0f8ff;padding:20px;border-radius:10px;">
             <h2>📡 Статус: {status}</h2>
-            <p>⏰ Сбор данных: {uptime_str}</p>
-            <p>📨 Всего сообщений: {total_messages}</p>
-            <p>🔄 WebSocket: wss://ws.growagardenpro.com/</p>
-            <p>🕒 Последнее обновление: {game_data['last_update'].strftime('%H:%M:%S') if game_data['last_update'] else 'никогда'}</p>
+            <p>🕒 Последнее обновление: {update_str}</p>
+            <p>📨 Всего обновлений: {game_data['total_updates']}</p>
+            <p>🎯 Отслеживаю: {len(TARGET_ITEMS)} предметов</p>
+            <p>🔗 Сервер: websocket.joshlei.com</p>
         </div>
         
-        <div class="card">
-            <h2>📊 Статистика сообщений:</h2>
+        <div style="background:#fff;padding:20px;border-radius:10px;margin-top:20px;">
+            <h3>📊 Текущий сток:</h3>
             <ul>
-                {"".join([f'<li><b>{typ}</b>: {cnt} раз</li>' for typ, cnt in sorted(message_types.items())])}
+                {sections_info if sections_info else "<li>Нет данных</li>"}
             </ul>
         </div>
         
-        {stock_info}
-        
-        <div class="card">
-            <h2>📝 Последние сообщения:</h2>
-            {"".join([f'<div class="message"><b>{msg["type"]}</b> ({msg["timestamp"][11:19]})</div>' for msg in recent_messages]) if recent_messages else '<p>Нет сообщений</p>'}
+        <div style="background:#e7f3ff;padding:20px;border-radius:10px;margin-top:20px;">
+            <h3>⚡ Как работает:</h3>
+            <ol>
+                <li>Подключение к <b>websocket.joshlei.com</b></li>
+                <li>Получение обновлений в реальном времени</li>
+                <li>Поиск целевых предметов (Octobloom и др.)</li>
+                <li>Уведомления в Telegram при обнаружении</li>
+            </ol>
         </div>
         
-        <div class="card">
-            <h2>🔧 API эндпоинты:</h2>
-            <ul>
-                <li><a href="/stats">/stats</a> - Статистика</li>
-                <li><a href="/messages">/messages</a> - Все сообщения (JSON)</li>
-                <li><a href="/stock">/stock</a> - Последний сток</li>
-                <li><a href="/types">/types</a> - Типы сообщений</li>
-            </ul>
-        </div>
+        <p><a href="/stock">Посмотреть данные стока</a> | <a href="/status">Статус API</a></p>
     </body>
     </html>
     """
 
-@app.route('/stats')
-def stats():
-    """Статистика в JSON"""
-    uptime = datetime.now() - game_data['collection_start']
+@app.route('/stock')
+def show_stock():
+    """Показывает данные стока"""
+    if not game_data['last_stock']:
+        return "Нет данных о стоке"
+    
+    stock_data = {}
+    for section, items in game_data['last_stock'].items():
+        stock_data[section] = []
+        for item in items[:10]:  # Первые 10 предметов каждой секции
+            stock_data[section].append({
+                'name': item.get('display_name', 'Unknown'),
+                'quantity': item.get('quantity', 0)
+            })
     
     return jsonify({
+        'timestamp': game_data['last_update'].isoformat() if game_data['last_update'] else None,
+        'total_updates': game_data['total_updates'],
+        'stock': stock_data
+    })
+
+@app.route('/status')
+def status():
+    """Статус системы"""
+    return jsonify({
         'connected': game_data['connected'],
-        'total_messages': game_data['total_received'],
-        'message_types': game_data['message_types'],
-        'uptime_seconds': uptime.total_seconds(),
-        'collection_start': game_data['collection_start'].isoformat(),
         'last_update': game_data['last_update'].isoformat() if game_data['last_update'] else None,
-        'websocket_url': 'wss://ws.growagardenpro.com/'
-    })
-
-@app.route('/messages')
-def messages():
-    """Все сообщения (первые 100)"""
-    return jsonify({
-        'total': len(game_data['all_messages']),
-        'sample': game_data['all_messages'][:100]
-    })
-
-@app.route('/stock')
-def stock():
-    """Последние данные стока"""
-    if game_data['last_stock_data']:
-        return jsonify(game_data['last_stock_data'])
-    return jsonify({'error': 'No stock data yet'})
-
-@app.route('/types')
-def types():
-    """Анализ типов сообщений"""
-    return jsonify({
-        'types': game_data['message_types'],
-        'total_types': len(game_data['message_types'])
+        'total_updates': game_data['total_updates'],
+        'websocket_url': WEBSOCKET_URL,
+        'tracking_items': list(TARGET_ITEMS.keys())
     })
 
 # ==================== ЗАПУСК ====================
 if __name__ == '__main__':
     logger.info("=" * 60)
-    logger.info("🎮 ЗАПУСК СБОРА ВСЕХ ДАННЫХ ИЗ ИГРЫ")
+    logger.info("🎮 ЗАПУСК МОНИТОРИНГА (НОВЫЙ СЕРВЕР)")
     logger.info("=" * 60)
-    logger.info("🔗 WebSocket: wss://ws.growagardenpro.com/")
-    logger.info("🎯 Цель: собрать ВСЕ типы данных для анализа")
-    logger.info("📊 Режим: полный сбор + веб-интерфейс")
+    logger.info(f"🔗 WebSocket: {WEBSOCKET_URL}")
+    logger.info("🎯 Отслеживаю: Octobloom, Zebrazinkle, Firework Fern, Tomato")
+    logger.info("⚡ Режим: реальное время с нового сервера")
     logger.info("=" * 60)
     
     # Запускаем WebSocket клиент
@@ -239,5 +317,5 @@ if __name__ == '__main__':
     
     # Запускаем Flask
     port = int(os.environ.get('PORT', 10000))
-    logger.info(f"🌐 Веб-сервер запускается на порту {port}")
+    logger.info(f"🌐 Веб-сервер на порту {port}")
     app.run(host='0.0.0.0', port=port, debug=False, use_reloader=False)
