@@ -4,7 +4,9 @@
 """
 
 import os
-import discord
+# ИСПРАВЛЕНИЕ: используем disnake вместо discord
+import disnake as discord
+from disnake.ext import commands
 import requests
 from flask import Flask
 import threading
