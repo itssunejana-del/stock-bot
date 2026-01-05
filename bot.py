@@ -1,15 +1,17 @@
 #!/usr/bin/env python3
 """
-🚀 МОНИТОРИНГ KIRO ЧЕРЕЗ DISCORD GATEWAY
-Нет запросов к API - только слушаем события
+🚀 МОНИТОРИНГ KIRO - РАБОЧАЯ ВЕРСИЯ
+Простой и понятный код без сложной асинхронщины
 """
 
 import os
 import discord
+import asyncio
 from telegram import Bot
 from flask import Flask
 import threading
 from datetime import datetime
+import time
 
 # ==================== НАСТРОЙКИ ====================
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
@@ -23,6 +25,10 @@ if not all([DISCORD_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHANNEL_ID]):
     print('❌ Проверьте переменные в Render!')
     exit(1)
 
+if not DISCORD_CHANNEL_IDS or DISCORD_CHANNEL_IDS == ['']:
+    print('❌ Укажите DISCORD_CHANNEL_IDS через запятую')
+    exit(1)
+
 # ==================== ОТСЛЕЖИВАЕМЫЕ ПРЕДМЕТЫ ====================
 TARGET_ITEMS = {
     'octobloom': {'keywords': ['octobloom', 'октоблум'], 'emoji': '🐙', 'display_name': 'Octobloom'},
@@ -31,83 +37,100 @@ TARGET_ITEMS = {
     'tomato': {'keywords': ['tomato', 'томат', 'помидор'], 'emoji': '🍅', 'display_name': 'Tomato'}
 }
 
-# ==================== DISCORD CLIENT ====================
-# Ключевое отличие: используем Gateway, а не API запросы
-intents = discord.Intents.default()
-intents.message_content = True  # Должен быть включен в Discord Dev Portal
-
-client = discord.Client(intents=intents)
-telegram_bot = Bot(token=TELEGRAM_TOKEN)
-start_time = datetime.now()
+# ==================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ====================
 found_items = {item: 0 for item in TARGET_ITEMS}
+start_time = datetime.now()
+telegram_bot = None
+discord_client = None
 
-@client.event
-async def on_ready():
-    """Вызывается при подключении к Discord"""
-    print(f'✅ Discord бот {client.user} готов!')
-    print(f'👀 Слушаю каналы: {", ".join(DISCORD_CHANNEL_IDS)}')
+# ==================== TELEGRAM ФУНКЦИИ ====================
+def send_to_telegram_sync(item_config):
+    """Синхронная отправка в Telegram (проще)"""
+    import requests
     
-    # Отправляем стартовое сообщение в Telegram
-    try:
-        items_list = "\n".join([f"{item['emoji']} {item['display_name']}" for item in TARGET_ITEMS.values()])
-        await telegram_bot.send_message(
-            TELEGRAM_CHANNEL_ID,
-            f"✅ <b>Мониторинг Kiro запущен через Gateway!</b>\n\n📊 Отслеживаю:\n{items_list}\n\n🤖 Бот работает!",
-            parse_mode='HTML'
-        )
-    except Exception as e:
-        print(f'⚠️ Не отправил стартовое сообщение: {e}')
-
-@client.event
-async def on_message(message):
-    """Вызывается при КАЖДОМ новом сообщении в Discord"""
-    # 1. Проверяем канал
-    if str(message.channel.id) not in DISCORD_CHANNEL_IDS:
-        return
-    
-    # 2. Проверяем автора (только Kiro)
-    if BOT_NAME_TO_TRACK and BOT_NAME_TO_TRACK not in message.author.name.lower():
-        return
-    
-    print(f'📩 Новое сообщение от {message.author.name} в #{message.channel.name}')
-    
-    # 3. Получаем текст
-    full_text = message.content.lower()
-    for embed in message.embeds:
-        if embed.title: full_text += ' ' + embed.title.lower()
-        if embed.description: full_text += ' ' + embed.description.lower()
-    
-    # 4. Ищем предметы
-    for item_name, item_config in TARGET_ITEMS.items():
-        for keyword in item_config['keywords']:
-            if keyword.lower() in full_text:
-                await send_to_telegram(item_config)
-                found_items[item_name] += 1
-                break
-
-async def send_to_telegram(item_config):
-    """Отправляет уведомление в Telegram"""
     try:
         current_time = datetime.now().strftime('%H:%M:%S')
         text_message = f"{item_config['emoji']} <b>{item_config['display_name']}</b> найден в {current_time}"
         
-        await telegram_bot.send_message(
-            TELEGRAM_CHANNEL_ID,
-            text_message,
-            parse_mode='HTML'
-        )
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        data = {
+            "chat_id": TELEGRAM_CHANNEL_ID,
+            "text": text_message,
+            "parse_mode": "HTML"
+        }
         
-        print(f"✅ Отправлено в Telegram: {item_config['emoji']} {item_config['display_name']}")
-        
+        response = requests.post(url, json=data, timeout=10)
+        if response.status_code == 200:
+            print(f"✅ Telegram: {item_config['emoji']} {item_config['display_name']}")
+            return True
+        else:
+            print(f"❌ Ошибка Telegram {response.status_code}")
+            return False
+            
     except Exception as e:
         print(f'❌ Ошибка Telegram: {e}')
+        return False
+
+# ==================== DISCORD КЛИЕНТ ====================
+def run_discord_bot():
+    """Запускает Discord бота в отдельном потоке"""
+    global discord_client
+    
+    # Создаем нового клиента
+    intents = discord.Intents.default()
+    intents.message_content = True
+    
+    client = discord.Client(intents=intents)
+    discord_client = client
+    
+    @client.event
+    async def on_ready():
+        print(f'✅ Discord бот {client.user} подключен!')
+        print(f'👀 Каналы: {", ".join(DISCORD_CHANNEL_IDS)}')
+        
+        # Стартовое сообщение в Telegram
+        items_list = "\n".join([f"{item['emoji']} {item['display_name']}" for item in TARGET_ITEMS.values()])
+        send_to_telegram_sync({
+            'emoji': '🚀',
+            'display_name': f'Мониторинг Kiro запущен!\n\n📊 Отслеживаю:\n{items_list}'
+        })
+    
+    @client.event
+    async def on_message(message):
+        # 1. Проверяем канал
+        if str(message.channel.id) not in DISCORD_CHANNEL_IDS:
+            return
+        
+        # 2. Проверяем автора
+        if BOT_NAME_TO_TRACK and BOT_NAME_TO_TRACK not in message.author.name.lower():
+            return
+        
+        print(f'📩 Сообщение от {message.author.name}: {message.content[:50]}...')
+        
+        # 3. Получаем текст
+        full_text = message.content.lower()
+        for embed in message.embeds:
+            if embed.title: full_text += ' ' + embed.title.lower()
+            if embed.description: full_text += ' ' + embed.description.lower()
+        
+        # 4. Ищем предметы
+        for item_name, item_config in TARGET_ITEMS.items():
+            for keyword in item_config['keywords']:
+                if keyword.lower() in full_text:
+                    # Используем синхронную функцию
+                    send_to_telegram_sync(item_config)
+                    found_items[item_name] += 1
+                    break
+    
+    # Запускаем бота
+    print('🔗 Подключение к Discord...')
+    client.run(DISCORD_TOKEN)
 
 # ==================== FLASK СЕРВЕР ====================
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    """Главная страница"""
     uptime = datetime.now() - start_time
     
     items_stats = []
@@ -116,48 +139,70 @@ def home():
             item = TARGET_ITEMS[item_name]
             items_stats.append(f"{item['emoji']} {item['display_name']}: {count}")
     
+    discord_status = "✅ Подключен" if discord_client and discord_client.is_ready() else "🔄 Подключение..."
+    
     return f"""
     <html><body style="font-family: Arial; padding: 20px;">
-        <h1>🌱 Мониторинг Kiro (Gateway) 🍅</h1>
-        <p><strong>Статус:</strong> ✅ Работает через WebSocket</p>
+        <h1>🌱 Мониторинг Kiro 🍅</h1>
+        <p><strong>Discord:</strong> {discord_status}</p>
         <p><strong>Время работы:</strong> {str(uptime).split('.')[0]}</p>
         <p><strong>Каналов:</strong> {len(DISCORD_CHANNEL_IDS)}</p>
+        <p><strong>Слежу за:</strong> {BOT_NAME_TO_TRACK}</p>
         
-        <h2>🎯 Отслеживаю:</h2>
+        <h2>🎯 Предметы:</h2>
         <ul><li>🐙 Octobloom</li><li>🦓 Zebrazinkle</li>
         <li>🎆 Firework Fern</li><li>🍅 Tomato</li></ul>
         
         <h2>📊 Найдено:</h2>
         <ul>{''.join([f'<li>{stat}</li>' for stat in items_stats]) if items_stats else '<li>Пока ничего</li>'}</ul>
         
-        <p><em>🤖 Discord отправляет сообщения сам, нет запросов к API</em></p>
+        <p><em>⏰ {datetime.now().strftime('%H:%M:%S')}</em></p>
     </body></html>
     """
 
 @app.route('/health')
 def health():
-    return {'status': 'healthy', 'timestamp': datetime.now().isoformat()}
+    discord_ok = discord_client and discord_client.is_ready()
+    return {
+        'status': 'healthy' if discord_ok else 'connecting',
+        'timestamp': datetime.now().isoformat(),
+        'discord_connected': discord_ok,
+        'items_found': found_items
+    }
+
+@app.route('/test')
+def test():
+    """Тестовая отправка в Telegram"""
+    result = send_to_telegram_sync({'emoji': '🧪', 'display_name': 'Тестовое сообщение от бота'})
+    return {'test': 'sent', 'success': result}
 
 # ==================== ЗАПУСК ====================
 def run_flask():
     """Запускает Flask сервер"""
-    from waitress import serve
-    port = int(os.getenv('PORT', 10000))
-    print(f'🌐 Веб-сервер запущен на порту {port}')
-    serve(app, host='0.0.0.0', port=port)
+    try:
+        from waitress import serve
+        port = int(os.getenv('PORT', 10000))
+        print(f'🌐 Веб-сервер на порту {port}')
+        serve(app, host='0.0.0.0', port=port)
+    except ImportError:
+        print('⚠️ Waitress не установлен, запускаю dev-сервер')
+        app.run(host='0.0.0.0', port=10000, debug=False)
 
 if __name__ == '__main__':
+    print('=' * 60)
+    print('🚀 ЗАПУСК МОНИТОРИНГА KIRO')
+    print('=' * 60)
+    print(f'📊 Предметов: {len(TARGET_ITEMS)}')
+    print(f'📺 Каналов: {len(DISCORD_CHANNEL_IDS)}')
+    print(f'🤖 Отслеживаю: {BOT_NAME_TO_TRACK}')
+    print('=' * 60)
+    
     # Запускаем Flask в отдельном потоке
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     
-    # Запускаем Discord клиент (WebSocket соединение)
-    print('=' * 60)
-    print('🚀 ЗАПУСК МОНИТОРИНГА ЧЕРЕЗ DISCORD GATEWAY')
-    print('=' * 60)
-    print('✅ НЕТ запросов к Discord API')
-    print('✅ Discord сам присылает сообщения через WebSocket')
-    print('✅ Нет блокировок за лимиты')
-    print('=' * 60)
+    # Даем Flask время запуститься
+    time.sleep(2)
     
-    client.run(DISCORD_TOKEN)
+    # Запускаем Discord бота (блокирующий вызов)
+    run_discord_bot()
