@@ -5,7 +5,8 @@ WebSocket подключение к Discord через discord.py
 """
 
 import os
-import discord
+import disnake as discord
+from disnake.ext import commands
 import requests
 from flask import Flask
 import threading
