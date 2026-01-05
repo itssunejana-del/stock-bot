@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: kiro-monitor-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: TELEGRAM_CHANNEL_ID
+        sync: false
+      - key: DISCORD_CHANNEL_IDS
+        value: "123,456,789"  # Замените на реальные ID
+      - key: BOT_NAME_TO_TRACK
+        value: "kiro"
