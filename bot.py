@@ -1,160 +1,143 @@
 #!/usr/bin/env python3
 """
-🚀 МОНИТОРИНГ KIRO - РАБОЧАЯ ВЕРСИЯ
-Простой и понятный код без сложной асинхронщины
+🚀 ПРОСТОЙ МОНИТОРИНГ KIRO ДЛЯ PYTHON 3.10
 """
 
 import os
 import discord
-import asyncio
-from telegram import Bot
+import requests
 from flask import Flask
 import threading
-from datetime import datetime
 import time
+from datetime import datetime
 
 # ==================== НАСТРОЙКИ ====================
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
-DISCORD_CHANNEL_IDS = os.getenv('DISCORD_CHANNEL_IDS', '').split(',')
-BOT_NAME_TO_TRACK = os.getenv('BOT_NAME_TO_TRACK', 'kiro').lower()
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHANNEL_ID = os.getenv('TELEGRAM_CHANNEL_ID')
+DISCORD_CHANNEL_IDS = os.getenv('DISCORD_CHANNEL_IDS', '').split(',')
+BOT_NAME_TO_TRACK = os.getenv('BOT_NAME_TO_TRACK', 'kiro')
 
-# Проверяем переменные
-if not all([DISCORD_TOKEN, TELEGRAM_TOKEN, TELEGRAM_CHANNEL_ID]):
-    print('❌ Проверьте переменные в Render!')
+# Проверка
+if not DISCORD_TOKEN:
+    print('❌ Нет DISCORD_TOKEN!')
     exit(1)
-
-if not DISCORD_CHANNEL_IDS or DISCORD_CHANNEL_IDS == ['']:
-    print('❌ Укажите DISCORD_CHANNEL_IDS через запятую')
+if not TELEGRAM_TOKEN:
+    print('❌ Нет TELEGRAM_TOKEN!')
     exit(1)
-
-# ==================== ОТСЛЕЖИВАЕМЫЕ ПРЕДМЕТЫ ====================
-TARGET_ITEMS = {
-    'octobloom': {'keywords': ['octobloom', 'октоблум'], 'emoji': '🐙', 'display_name': 'Octobloom'},
-    'zebrazinkle': {'keywords': ['zebrazinkle', 'zebra zinkle'], 'emoji': '🦓', 'display_name': 'Zebrazinkle'},
-    'firework_fern': {'keywords': ['firework fern', 'fireworkfern'], 'emoji': '🎆', 'display_name': 'Firework Fern'},
-    'tomato': {'keywords': ['tomato', 'томат', 'помидор'], 'emoji': '🍅', 'display_name': 'Tomato'}
-}
-
-# ==================== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ====================
-found_items = {item: 0 for item in TARGET_ITEMS}
-start_time = datetime.now()
-telegram_bot = None
-discord_client = None
+if not TELEGRAM_CHANNEL_ID:
+    print('❌ Нет TELEGRAM_CHANNEL_ID!')
+    exit(1)
 
 # ==================== TELEGRAM ФУНКЦИИ ====================
-def send_to_telegram_sync(item_config):
-    """Синхронная отправка в Telegram (проще)"""
-    import requests
-    
+def send_telegram(text):
+    """Отправляет сообщение в Telegram"""
     try:
-        current_time = datetime.now().strftime('%H:%M:%S')
-        text_message = f"{item_config['emoji']} <b>{item_config['display_name']}</b> найден в {current_time}"
-        
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         data = {
             "chat_id": TELEGRAM_CHANNEL_ID,
-            "text": text_message,
+            "text": text,
             "parse_mode": "HTML"
         }
-        
         response = requests.post(url, json=data, timeout=10)
-        if response.status_code == 200:
-            print(f"✅ Telegram: {item_config['emoji']} {item_config['display_name']}")
-            return True
-        else:
-            print(f"❌ Ошибка Telegram {response.status_code}")
-            return False
-            
+        return response.status_code == 200
     except Exception as e:
         print(f'❌ Ошибка Telegram: {e}')
         return False
 
-# ==================== DISCORD КЛИЕНТ ====================
-def run_discord_bot():
-    """Запускает Discord бота в отдельном потоке"""
-    global discord_client
-    
-    # Создаем нового клиента
-    intents = discord.Intents.default()
-    intents.message_content = True
-    
-    client = discord.Client(intents=intents)
-    discord_client = client
-    
-    @client.event
-    async def on_ready():
-        print(f'✅ Discord бот {client.user} подключен!')
-        print(f'👀 Каналы: {", ".join(DISCORD_CHANNEL_IDS)}')
+# ==================== DISCORD БОТ ====================
+class DiscordBot:
+    def __init__(self):
+        self.found_items = {
+            'octobloom': 0,
+            'zebrazinkle': 0,
+            'firework_fern': 0,
+            'tomato': 0
+        }
         
-        # Стартовое сообщение в Telegram
-        items_list = "\n".join([f"{item['emoji']} {item['display_name']}" for item in TARGET_ITEMS.values()])
-        send_to_telegram_sync({
-            'emoji': '🚀',
-            'display_name': f'Мониторинг Kiro запущен!\n\n📊 Отслеживаю:\n{items_list}'
-        })
-    
-    @client.event
-    async def on_message(message):
-        # 1. Проверяем канал
-        if str(message.channel.id) not in DISCORD_CHANNEL_IDS:
-            return
+    def run(self):
+        """Запускает Discord бота"""
+        intents = discord.Intents.default()
+        intents.message_content = True
         
-        # 2. Проверяем автора
-        if BOT_NAME_TO_TRACK and BOT_NAME_TO_TRACK not in message.author.name.lower():
-            return
+        client = discord.Client(intents=intents)
         
-        print(f'📩 Сообщение от {message.author.name}: {message.content[:50]}...')
+        @client.event
+        async def on_ready():
+            print(f'✅ Discord бот {client.user} подключен!')
+            
+            # Стартовое сообщение
+            send_telegram(
+                "✅ <b>Мониторинг Kiro запущен!</b>\n\n"
+                "🎯 <b>Отслеживаю:</b>\n"
+                "• 🐙 Octobloom\n"
+                "• 🦓 Zebrazinkle\n"
+                "• 🎆 Firework Fern\n"
+                "• 🍅 Tomato\n\n"
+                "🤖 Бот готов к работе!"
+            )
         
-        # 3. Получаем текст
-        full_text = message.content.lower()
-        for embed in message.embeds:
-            if embed.title: full_text += ' ' + embed.title.lower()
-            if embed.description: full_text += ' ' + embed.description.lower()
+        @client.event
+        async def on_message(message):
+            # Проверяем канал
+            if str(message.channel.id) not in DISCORD_CHANNEL_IDS:
+                return
+            
+            # Проверяем автора
+            if BOT_NAME_TO_TRACK.lower() not in message.author.name.lower():
+                return
+            
+            # Ищем ключевые слова
+            text = message.content.lower()
+            
+            items_found = []
+            if 'octobloom' in text or 'октоблум' in text:
+                items_found.append('🐙 Octobloom')
+                self.found_items['octobloom'] += 1
+            if 'zebrazinkle' in text:
+                items_found.append('🦓 Zebrazinkle')
+                self.found_items['zebrazinkle'] += 1
+            if 'firework' in text:
+                items_found.append('🎆 Firework Fern')
+                self.found_items['firework_fern'] += 1
+            if 'tomato' in text or 'томат' in text:
+                items_found.append('🍅 Tomato')
+                self.found_items['tomato'] += 1
+            
+            # Отправляем уведомления
+            for item in items_found:
+                current_time = datetime.now().strftime('%H:%M:%S')
+                send_telegram(f"{item} найден в {current_time}")
+                print(f"✅ Найден: {item}")
         
-        # 4. Ищем предметы
-        for item_name, item_config in TARGET_ITEMS.items():
-            for keyword in item_config['keywords']:
-                if keyword.lower() in full_text:
-                    # Используем синхронную функцию
-                    send_to_telegram_sync(item_config)
-                    found_items[item_name] += 1
-                    break
-    
-    # Запускаем бота
-    print('🔗 Подключение к Discord...')
-    client.run(DISCORD_TOKEN)
+        # Запускаем
+        print('🔗 Подключение к Discord...')
+        client.run(DISCORD_TOKEN)
 
 # ==================== FLASK СЕРВЕР ====================
 app = Flask(__name__)
+bot = DiscordBot()
+start_time = datetime.now()
 
 @app.route('/')
 def home():
     uptime = datetime.now() - start_time
     
-    items_stats = []
-    for item_name, count in found_items.items():
+    stats = []
+    for name, count in bot.found_items.items():
         if count > 0:
-            item = TARGET_ITEMS[item_name]
-            items_stats.append(f"{item['emoji']} {item['display_name']}: {count}")
-    
-    discord_status = "✅ Подключен" if discord_client and discord_client.is_ready() else "🔄 Подключение..."
+            emoji = '🐙' if name == 'octobloom' else '🦓' if name == 'zebrazinkle' else '🎆' if name == 'firework_fern' else '🍅'
+            stats.append(f"{emoji} {name}: {count}")
     
     return f"""
     <html><body style="font-family: Arial; padding: 20px;">
         <h1>🌱 Мониторинг Kiro 🍅</h1>
-        <p><strong>Discord:</strong> {discord_status}</p>
+        <p><strong>Статус:</strong> ✅ Работает</p>
         <p><strong>Время работы:</strong> {str(uptime).split('.')[0]}</p>
         <p><strong>Каналов:</strong> {len(DISCORD_CHANNEL_IDS)}</p>
-        <p><strong>Слежу за:</strong> {BOT_NAME_TO_TRACK}</p>
-        
-        <h2>🎯 Предметы:</h2>
-        <ul><li>🐙 Octobloom</li><li>🦓 Zebrazinkle</li>
-        <li>🎆 Firework Fern</li><li>🍅 Tomato</li></ul>
         
         <h2>📊 Найдено:</h2>
-        <ul>{''.join([f'<li>{stat}</li>' for stat in items_stats]) if items_stats else '<li>Пока ничего</li>'}</ul>
+        <ul>{''.join([f'<li>{stat}</li>' for stat in stats]) if stats else '<li>Пока ничего</li>'}</ul>
         
         <p><em>⏰ {datetime.now().strftime('%H:%M:%S')}</em></p>
     </body></html>
@@ -162,47 +145,32 @@ def home():
 
 @app.route('/health')
 def health():
-    discord_ok = discord_client and discord_client.is_ready()
-    return {
-        'status': 'healthy' if discord_ok else 'connecting',
-        'timestamp': datetime.now().isoformat(),
-        'discord_connected': discord_ok,
-        'items_found': found_items
-    }
-
-@app.route('/test')
-def test():
-    """Тестовая отправка в Telegram"""
-    result = send_to_telegram_sync({'emoji': '🧪', 'display_name': 'Тестовое сообщение от бота'})
-    return {'test': 'sent', 'success': result}
+    return {'status': 'healthy', 'time': datetime.now().isoformat()}
 
 # ==================== ЗАПУСК ====================
 def run_flask():
     """Запускает Flask сервер"""
-    try:
-        from waitress import serve
-        port = int(os.getenv('PORT', 10000))
-        print(f'🌐 Веб-сервер на порту {port}')
-        serve(app, host='0.0.0.0', port=port)
-    except ImportError:
-        print('⚠️ Waitress не установлен, запускаю dev-сервер')
-        app.run(host='0.0.0.0', port=10000, debug=False)
+    from waitress import serve
+    port = int(os.getenv('PORT', 10000))
+    print(f'🌐 Веб-сервер на порту {port}')
+    serve(app, host='0.0.0.0', port=port)
 
 if __name__ == '__main__':
     print('=' * 60)
     print('🚀 ЗАПУСК МОНИТОРИНГА KIRO')
     print('=' * 60)
-    print(f'📊 Предметов: {len(TARGET_ITEMS)}')
-    print(f'📺 Каналов: {len(DISCORD_CHANNEL_IDS)}')
-    print(f'🤖 Отслеживаю: {BOT_NAME_TO_TRACK}')
-    print('=' * 60)
     
-    # Запускаем Flask в отдельном потоке
+    # Запускаем Flask в фоне
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     
     # Даем Flask время запуститься
-    time.sleep(2)
+    time.sleep(3)
     
     # Запускаем Discord бота (блокирующий вызов)
-    run_discord_bot()
+    try:
+        bot.run()
+    except Exception as e:
+        print(f'❌ Ошибка Discord: {e}')
+        print('🔄 Перезапуск через 30 секунд...')
+        time.sleep(30)
