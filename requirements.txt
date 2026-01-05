@@ -1,5 +1,5 @@
-discord.py==2.3.0
-python-telegram-bot==20.7
-flask==2.3.0
+discord.py==2.4.0a20241214
+Flask==2.3.0
 requests==2.31.0
 waitress==2.1.2
+python-telegram-bot==20.7
