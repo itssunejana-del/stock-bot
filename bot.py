@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-🚀 МОНИТОРИНГ KIRO (WebSocket + Полные логи стоков)
+🚀 МОНИТОРИНГ KIRO (WebSocket + Защита от дублей)
 """
 
 import os
@@ -47,12 +47,9 @@ logger.info(f"🤖 Бот Telegram: {TELEGRAM_BOT_CHAT_ID}")
 bot_start_time = datetime.now()
 ping_count = 0
 last_ping_time = None
-found_items_count = {
-    'octobloom': 0,
-    'zebrazinkle': 0, 
-    'firework_fern': 0,
-    'tomato': 0
-}
+found_items_count = {}
+processed_messages = set()  # Защита от дублей
+MAX_CACHE_SIZE = 50         # Храним 50 последних сообщений
 
 # ==================== TELEGRAM ФУНКЦИИ ====================
 def send_telegram(chat_id, text, parse_mode="HTML"):
@@ -94,7 +91,12 @@ def send_telegram_sticker(chat_id, sticker_id):
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendSticker"
         data = {"chat_id": chat_id, "sticker": sticker_id}
         response = requests.post(url, json=data, timeout=10)
-        return response.status_code == 200
+        if response.status_code == 200:
+            logger.info(f"📢 Стикер отправлен в канал")
+            return True
+        else:
+            logger.error(f"❌ Ошибка отправки стикера: {response.status_code}")
+            return False
     except Exception as e:
         logger.error(f'❌ Ошибка отправки стикера: {e}')
         return False
@@ -113,19 +115,23 @@ TARGET_ITEMS = {
         'emoji': '🦓',
         'display_name': 'Zebrazinkle'
     },
-    'firework_fern': {
-        'keywords': ['firework fern', 'fireworkfern'],
-        'sticker_id': "CAACAgIAAxkBAAEQHChpUBeOda8Uf0Uwig6BwvkW_z1ndAAC5Y0AAl8dgEoandjqAtpRWTYE",
-        'emoji': '🎆',
-        'display_name': 'Firework Fern'
+    'bonanza_bloom': {
+        'keywords': ['bonanza bloom', 'bonanzabloom'],
+        'sticker_id': "CAACAgIAAxkBAAEQMuhpX4VLrPkOU8xlgCq6up0x4UyQTQACcokAAkvx0UoiB5ZoW5ljDzgE",
+        'emoji': '🎰',
+        'display_name': 'Bonanza Bloom'
     },
     'tomato': {
         'keywords': ['tomato', 'томат', '🍅'],
-        'sticker_id': "CAACAgIAAxkBAAEP0dVpIPy4Ujgqz81tWnT7ljlfn8_7TQACgYgAAv3qCEntgD_6UPDjUDYE",  # НОВЫЙ СТИКЕР ДЛЯ ТОМАТА
+        'sticker_id': "CAACAgIAAxkBAAEP-3lpOtdl3thyaZN8BfxTSAvD6kEkKgACf3sAAoEeWUgkKobs-st7ojYE",
         'emoji': '🍅',
         'display_name': 'Tomato'
     }
 }
+
+# Инициализируем счетчики
+for item_name in TARGET_ITEMS.keys():
+    found_items_count[item_name] = 0
 
 # ==================== САМОПИНГ ====================
 def self_pinger():
@@ -156,7 +162,10 @@ def self_pinger():
                         f"⏰ Работает: {hours:.1f} часов\n"
                         f"🕒 Последний пинг: {last_ping_time.strftime('%H:%M:%S')}\n"
                         f"✅ WebSocket активен\n"
-                        f"🎯 Найдено томатов: {found_items_count['tomato']}"
+                        f"🍅 Найдено томатов: {found_items_count['tomato']}\n"
+                        f"🐙 Найдено октоблумов: {found_items_count['octobloom']}\n"
+                        f"🦓 Найдено зебразинклов: {found_items_count['zebrazinkle']}\n"
+                        f"🎰 Найдено бонанза блумов: {found_items_count['bonanza_bloom']}"
                     )
                     send_to_bot(status)
             else:
@@ -171,107 +180,6 @@ def self_pinger():
         # Ждем 8 минут
         logger.info("💤 Ожидаю 8 минут до следующего самопинга...")
         time.sleep(480)
-
-# ==================== FLASK СЕРВЕР ====================
-app = Flask(__name__)
-
-@app.route('/')
-def home():
-    uptime = datetime.now() - bot_start_time
-    uptime_str = str(uptime).split('.')[0]
-    
-    stats = []
-    for item_name, count in found_items_count.items():
-        if count > 0:
-            item = TARGET_ITEMS[item_name]
-            stats.append(f"{item['emoji']} {item['display_name']}: {count}")
-    
-    return f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <title>🌱 Мониторинг Kiro 🍅</title>
-        <style>
-            body {{ font-family: Arial, sans-serif; padding: 20px; }}
-            .card {{ background: #f5f5f5; padding: 20px; border-radius: 10px; margin: 20px 0; }}
-            .status-ok {{ color: #2ecc71; font-weight: bold; }}
-        </style>
-    </head>
-    <body>
-        <h1>🌱 Мониторинг Kiro 🍅</h1>
-        
-        <div class="card">
-            <h2>📊 Статус системы</h2>
-            <p><strong>Состояние:</strong> <span class="status-ok">✅ WebSocket активен</span></p>
-            <p><strong>Время работы:</strong> {uptime_str}</p>
-            <p><strong>Самопингов:</strong> {ping_count}</p>
-            <p><strong>Последний пинг:</strong> {last_ping_time.strftime('%H:%M:%S') if last_ping_time else 'Еще не было'}</p>
-            <p><strong>Последнее обновление:</strong> {datetime.now().strftime('%H:%M:%S')}</p>
-        </div>
-        
-        <div class="card">
-            <h2>🎯 Отслеживаемые предметы</h2>
-            <ul>
-                <li>🐙 Octobloom</li>
-                <li>🦓 Zebrazinkle</li>
-                <li>🎆 Firework Fern</li>
-                <li>🍅 Tomato (для теста)</li>
-            </ul>
-            <p><em>📨 В канал: стикер при находке<br>🤖 В бота: полный сток + уведомление</em></p>
-        </div>
-        
-        <div class="card">
-            <h2>🏆 Найдено предметов</h2>
-            <ul>{"".join([f'<li>{stat}</li>' for stat in stats]) if stats else '<li>Пока ничего не найдено</li>'}</ul>
-        </div>
-        
-        <div class="card">
-            <h2>⚙️ Техническая информация</h2>
-            <p><strong>Метод:</strong> WebSocket (disnake)</p>
-            <p><strong>Python:</strong> 3.10.13</p>
-            <p><strong>Самопинг:</strong> Каждые 8 минут</p>
-            <p><strong>Автопереподключение:</strong> Да</p>
-            <p><strong>Уведомления:</strong> Стикеры в канал + логи в бота</p>
-        </div>
-        
-        <div class="card">
-            <h2>🔍 Для тестирования</h2>
-            <p><strong>Напиши в Discord канал:</strong> <code>tomato</code> или <code>🍅</code></p>
-            <p><strong>Бот отправит:</strong> Стикер в канал + полный сток в бота</p>
-            <p><a href="/health">Статус здоровья</a> | <a href="/test">Тест работы</a></p>
-        </div>
-    </body>
-    </html>
-    """
-
-@app.route('/health')
-def health():
-    return {
-        'status': 'healthy',
-        'timestamp': datetime.now().isoformat(),
-        'uptime_seconds': (datetime.now() - bot_start_time).total_seconds(),
-        'ping_count': ping_count,
-        'found_items': found_items_count,
-        'python_version': '3.10.13',
-        'service_url': RENDER_SERVICE_URL,
-        'last_update': datetime.now().strftime('%H:%M:%S')
-    }
-
-@app.route('/test')
-def test():
-    """Тестовая страница"""
-    send_to_bot("🧪 <b>Тест от бота!</b>\nЕсли видишь это - бот работает!")
-    send_to_channel("🧪 <b>Тест в канал!</b>\nБот активен и мониторит стоки.")
-    return "✅ Тестовые сообщения отправлены в Telegram"
-
-# ==================== ЗАПУСК FLASK В ФОНЕ ====================
-def run_flask():
-    """Запускает Flask сервер в фоновом режиме"""
-    from waitress import serve
-    port = int(os.getenv('PORT', 10000))
-    logger.info(f'🌐 Веб-сервер запущен на порту {port}')
-    serve(app, host='0.0.0.0', port=port)
 
 # ==================== ПОЛУЧЕНИЕ ТЕКСТА ИЗ СООБЩЕНИЯ ====================
 def extract_full_content(message):
@@ -296,14 +204,120 @@ def extract_full_content(message):
                 full_content += f"\n{embed.footer.text}\n"
     
     # 3. Очищаем от HTML/разметки Discord
-    # Убираем <:name:id> формат
     import re
+    # Убираем <:name:id> формат
     full_content = re.sub(r'<:[^:]+:\d+>', '', full_content)
+    # Убираем ** жирный текст **
+    full_content = re.sub(r'\*\*', '', full_content)
     
     # Экранируем HTML символы
     full_content = html.escape(full_content)
     
+    # Убираем лишние пустые строки
+    full_content = '\n'.join([line.strip() for line in full_content.split('\n') if line.strip()])
+    
     return full_content.strip()
+
+# ==================== FLASK СЕРВЕР ====================
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    uptime = datetime.now() - bot_start_time
+    uptime_str = str(uptime).split('.')[0]
+    
+    stats = []
+    for item_name, count in found_items_count.items():
+        if count > 0:
+            item = TARGET_ITEMS[item_name]
+            stats.append(f"{item['emoji']} {item['display_name']}: {count}")
+    
+    return f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <title>🌱 Мониторинг Kiro</title>
+        <style>
+            body {{ font-family: Arial, sans-serif; padding: 20px; }}
+            .card {{ background: #f5f5f5; padding: 20px; border-radius: 10px; margin: 20px 0; }}
+            .status-ok {{ color: #2ecc71; font-weight: bold; }}
+        </style>
+    </head>
+    <body>
+        <h1>🌱 Мониторинг Kiro</h1>
+        
+        <div class="card">
+            <h2>📊 Статус системы</h2>
+            <p><strong>Состояние:</strong> <span class="status-ok">✅ WebSocket активен</span></p>
+            <p><strong>Время работы:</strong> {uptime_str}</p>
+            <p><strong>Самопингов:</strong> {ping_count}</p>
+            <p><strong>Последний пинг:</strong> {last_ping_time.strftime('%H:%M:%S') if last_ping_time else 'Еще не было'}</p>
+            <p><strong>Обработано сообщений:</strong> {len(processed_messages)}</p>
+        </div>
+        
+        <div class="card">
+            <h2>🎯 Отслеживаемые предметы (4 предмета)</h2>
+            <ul>
+                <li>🐙 Octobloom</li>
+                <li>🦓 Zebrazinkle</li>
+                <li>🎰 Bonanza Bloom</li>
+                <li>🍅 Tomato (для теста)</li>
+            </ul>
+            <p><em>📨 В канал: ТОЛЬКО стикер<br>🤖 В бота: полный сток + уведомление</em></p>
+        </div>
+        
+        <div class="card">
+            <h2>🏆 Найдено предметов</h2>
+            <ul>{"".join([f'<li>{stat}</li>' for stat in stats]) if stats else '<li>Пока ничего не найдено</li>'}</ul>
+        </div>
+        
+        <div class="card">
+            <h2>⚙️ Техническая информация</h2>
+            <p><strong>Метод:</strong> WebSocket (disnake)</p>
+            <p><strong>Python:</strong> 3.10.13</p>
+            <p><strong>Самопинг:</strong> Каждые 8 минут</p>
+            <p><strong>Защита от дублей:</strong> Да (кеш 50 сообщений)</p>
+            <p><strong>Уведомления:</strong> Стикеры в канал + полные логи в бота</p>
+        </div>
+        
+        <div class="card">
+            <h2>🔍 Для тестирования</h2>
+            <p><strong>Напиши в Discord канал:</strong> <code>tomato</code> или <code>🍅</code></p>
+            <p><strong>Бот отправит:</strong> Стикер в канал + полный сток в бота</p>
+            <p><a href="/health">Статус здоровья</a> | <a href="/test">Тест работы</a></p>
+        </div>
+    </body>
+    </html>
+    """
+
+@app.route('/health')
+def health():
+    return {
+        'status': 'healthy',
+        'timestamp': datetime.now().isoformat(),
+        'uptime_seconds': (datetime.now() - bot_start_time).total_seconds(),
+        'ping_count': ping_count,
+        'found_items': found_items_count,
+        'processed_messages': len(processed_messages),
+        'python_version': '3.10.13',
+        'service_url': RENDER_SERVICE_URL,
+        'last_update': datetime.now().strftime('%H:%M:%S')
+    }
+
+@app.route('/test')
+def test():
+    """Тестовая страница"""
+    send_to_bot("🧪 <b>Тест от бота!</b>\nЕсли видишь это - бот работает!")
+    return "✅ Тестовое сообщение отправлено в бота"
+
+# ==================== ЗАПУСК FLASK В ФОНЕ ====================
+def run_flask():
+    """Запускает Flask сервер в фоновом режиме"""
+    from waitress import serve
+    port = int(os.getenv('PORT', 10000))
+    logger.info(f'🌐 Веб-сервер запущен на порту {port}')
+    serve(app, host='0.0.0.0', port=port)
 
 # ==================== ЗАПУСК ВСЕГО ====================
 if __name__ == '__main__':
@@ -313,9 +327,14 @@ if __name__ == '__main__':
     print(f'🌱 Канал Discord: {SEEDS_CHANNEL_ID}')
     print(f'📢 Канал Telegram: {TELEGRAM_CHANNEL_ID}')
     print(f'🤖 Бот Telegram: {TELEGRAM_BOT_CHAT_ID}')
-    print('🎯 Отслеживаю: 4 предмета (включая томат)')
-    print('📨 В канал: стикеры при находке')
-    print('🤖 В бота: полные логи стоков')
+    print('🎯 Отслеживаю: 4 предмета')
+    print('   🐙 Octobloom')
+    print('   🦓 Zebrazinkle')
+    print('   🎰 Bonanza Bloom')
+    print('   🍅 Tomato (для теста)')
+    print('📨 В канал: ТОЛЬКО стикер')
+    print('🤖 В бота: полный сток + уведомление')
+    print('🛡️ Защита от дублей: Да')
     print('🏓 Самопинг: каждые 8 минут')
     print('=' * 60)
     
@@ -358,15 +377,18 @@ if __name__ == '__main__':
                 f"⏰ Запущен: {bot_start_time.strftime('%H:%M:%S')}\n\n"
                 f"🤖 WebSocket подключение активно\n"
                 f"🏓 Самопинг каждые 8 минут\n"
+                f"🛡️ Защита от дублей включена\n"
                 f"📨 <b>Логистика уведомлений:</b>\n"
-                f"• В канал: 🎯 Стикер при находке\n"
-                f"• В бота: 📋 Полный сток + уведомление\n"
+                f"• В канал: 🎯 ТОЛЬКО стикер\n"
+                f"• В бота: 📋 Полный сток + список найденного\n"
                 f"✅ Бот готов к работе!"
             )
         
         @client.event
         async def on_message(message):
             try:
+                global processed_messages
+                
                 # Пропускаем сообщения от самого бота
                 if message.author == client.user:
                     return
@@ -379,17 +401,30 @@ if __name__ == '__main__':
                 if 'kiro' not in message.author.name.lower():
                     return
                 
-                logger.info(f"📨 Сообщение от Kiro получено")
+                # ЗАЩИТА ОТ ДУБЛЕЙ
+                if message.id in processed_messages:
+                    logger.info(f"⏭️ Пропускаем дубль сообщения {message.id}")
+                    return
+                
+                # Добавляем ID в обработанные
+                processed_messages.add(message.id)
+                
+                # Очищаем старые ID если кэш переполнен
+                if len(processed_messages) > MAX_CACHE_SIZE:
+                    # Удаляем самый старый элемент
+                    processed_messages.remove(next(iter(processed_messages)))
+                
+                logger.info(f"📨 Новое сообщение от Kiro (ID: {message.id})")
                 
                 # Получаем ВСЁ содержимое сообщения
                 full_content = extract_full_content(message)
                 
-                # Логируем полный контент
-                logger.info(f"📋 Полный сток ({len(full_content)} символов): {full_content[:200]}...")
-                
                 if not full_content:
                     logger.info("📭 Сообщение пустое")
                     return
+                
+                # Логируем полный контент
+                logger.info(f"📋 Полный сток ({len(full_content)} символов)")
                 
                 # Ищем целевые предметы
                 found_items = []
@@ -411,18 +446,15 @@ if __name__ == '__main__':
                         item_config = TARGET_ITEMS[item_name]
                         found_items_count[item_name] += 1
                         
-                        # 1. В КАНАЛ: стикер
+                        # 1. В КАНАЛ: ТОЛЬКО стикер (без текста!)
                         if 'sticker_id' in item_config and item_config['sticker_id']:
                             sticker_sent = send_telegram_sticker(TELEGRAM_CHANNEL_ID, item_config['sticker_id'])
-                            if sticker_sent:
-                                logger.info(f"📢 Стикер {item_config['emoji']} отправлен в канал")
+                            if not sticker_sent:
+                                logger.warning(f"⚠️ Не удалось отправить стикер {item_config['emoji']}")
                         
-                        # 2. В КАНАЛ: текстовое уведомление
-                        channel_message = f"{item_config['emoji']} <b>{item_config['display_name']}</b> найден в {current_time}"
-                        send_to_channel(channel_message)
                         logger.info(f"✅ {item_config['emoji']} {item_config['display_name']} в {current_time}")
                     
-                    # 3. В БОТА: полный сток + список найденного
+                    # 2. В БОТА: полный сток + список найденного
                     found_items_list = "\n".join([f"• {TARGET_ITEMS[name]['emoji']} {TARGET_ITEMS[name]['display_name']}" for name in found_items])
                     
                     # Форматируем полный сток
@@ -473,10 +505,6 @@ if __name__ == '__main__':
         async def on_resumed():
             logger.info("✅ Discord WebSocket восстановлен")
             send_to_bot("✅ <b>Discord WebSocket восстановлен</b>\nМониторинг продолжается.")
-        
-        @client.event
-        async def on_error(event, *args, **kwargs):
-            logger.error(f"⚠️ Discord ошибка в событии: {event}")
         
         # Запускаем Discord бота (ОСНОВНОЙ ПОТОК - БЛОКИРУЮЩИЙ)
         logger.info('🔗 Подключение к Discord через WebSocket...')
