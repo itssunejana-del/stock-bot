@@ -12,6 +12,7 @@ import time
 from datetime import datetime
 import sys
 import logging
+import html
 
 # ==================== НАСТРОЙКА ЛОГГИНГА ====================
 logging.basicConfig(
@@ -61,7 +62,7 @@ def send_telegram(chat_id, text, parse_mode="HTML"):
         response = requests.post(url, json=data, timeout=10)
         
         if response.status_code == 200:
-            logger.info(f"✅ Telegram отправлено в {chat_id}: {text[:50]}...")
+            logger.info(f"✅ Telegram отправлено в {chat_id}")
             return True
         elif response.status_code == 429:
             retry_after = response.json().get('parameters', {}).get('retry_after', 30)
@@ -120,7 +121,7 @@ TARGET_ITEMS = {
     },
     'tomato': {
         'keywords': ['tomato', 'томат', '🍅'],
-        'sticker_id': "CAACAgIAAxkBAAEP1btpIXhIEvgVEK4c6ugJv1EgP7UY-wAChokAAtZpCElVMcRUgb_jdDYE",
+        'sticker_id': "CAACAgIAAxkBAAEP0dVpIPy4Ujgqz81tWnT7ljlfn8_7TQACgYgAAv3qCEntgD_6UPDjUDYE",  # НОВЫЙ СТИКЕР ДЛЯ ТОМАТА
         'emoji': '🍅',
         'display_name': 'Tomato'
     }
@@ -272,6 +273,38 @@ def run_flask():
     logger.info(f'🌐 Веб-сервер запущен на порту {port}')
     serve(app, host='0.0.0.0', port=port)
 
+# ==================== ПОЛУЧЕНИЕ ТЕКСТА ИЗ СООБЩЕНИЯ ====================
+def extract_full_content(message):
+    """Извлекает весь текст из сообщения Discord"""
+    full_content = ""
+    
+    # 1. Текст сообщения
+    if message.content:
+        full_content += f"{message.content}\n\n"
+    
+    # 2. Эмбеды (основной контент стоков)
+    if message.embeds:
+        for embed in message.embeds:
+            if embed.title:
+                full_content += f"{embed.title}\n"
+            if embed.description:
+                full_content += f"{embed.description}\n"
+            if embed.fields:
+                for field in embed.fields:
+                    full_content += f"\n{field.name}\n{field.value}\n"
+            if embed.footer and embed.footer.text:
+                full_content += f"\n{embed.footer.text}\n"
+    
+    # 3. Очищаем от HTML/разметки Discord
+    # Убираем <:name:id> формат
+    import re
+    full_content = re.sub(r'<:[^:]+:\d+>', '', full_content)
+    
+    # Экранируем HTML символы
+    full_content = html.escape(full_content)
+    
+    return full_content.strip()
+
 # ==================== ЗАПУСК ВСЕГО ====================
 if __name__ == '__main__':
     print('=' * 60)
@@ -349,27 +382,14 @@ if __name__ == '__main__':
                 logger.info(f"📨 Сообщение от Kiro получено")
                 
                 # Получаем ВСЁ содержимое сообщения
-                full_content = ""
-                
-                # 1. Текст сообщения
-                if message.content:
-                    full_content += f"{message.content}\n\n"
-                
-                # 2. Эмбеды (основной контент стоков)
-                if message.embeds:
-                    for embed in message.embeds:
-                        if embed.title:
-                            full_content += f"**{embed.title}**\n"
-                        if embed.description:
-                            full_content += f"{embed.description}\n"
-                        if embed.fields:
-                            for field in embed.fields:
-                                full_content += f"\n**{field.name}**\n{field.value}\n"
-                        if embed.footer:
-                            full_content += f"\n{embed.footer.text}\n"
+                full_content = extract_full_content(message)
                 
                 # Логируем полный контент
-                logger.info(f"📋 Полный сток:\n{full_content[:500]}...")
+                logger.info(f"📋 Полный сток ({len(full_content)} символов): {full_content[:200]}...")
+                
+                if not full_content:
+                    logger.info("📭 Сообщение пустое")
+                    return
                 
                 # Ищем целевые предметы
                 found_items = []
@@ -382,10 +402,10 @@ if __name__ == '__main__':
                             logger.info(f"🎯 Найдено: {keyword} → {item_config['display_name']}")
                             break
                 
+                current_time = datetime.now().strftime('%H:%M:%S')
+                
                 # Если нашли целевые предметы - отправляем уведомления
                 if found_items:
-                    current_time = datetime.now().strftime('%H:%M:%S')
-                    
                     # Обрабатываем каждый найденный предмет
                     for item_name in found_items:
                         item_config = TARGET_ITEMS[item_name]
@@ -405,12 +425,17 @@ if __name__ == '__main__':
                     # 3. В БОТА: полный сток + список найденного
                     found_items_list = "\n".join([f"• {TARGET_ITEMS[name]['emoji']} {TARGET_ITEMS[name]['display_name']}" for name in found_items])
                     
+                    # Форматируем полный сток
+                    formatted_stock = full_content
+                    if len(formatted_stock) > 3000:
+                        formatted_stock = formatted_stock[:3000] + "\n... (сообщение обрезано)"
+                    
                     bot_message = (
                         f"🎯 <b>Обнаружены предметы в {current_time}:</b>\n"
                         f"{found_items_list}\n\n"
                         f"📋 <b>Полный сток:</b>\n"
-                        f"<pre>{full_content[:1500]}</pre>\n\n"
-                        f"#сток #{current_time.replace(':', '')}"
+                        f"<pre>{formatted_stock}</pre>\n\n"
+                        f"#сток"
                     )
                     
                     send_to_bot(bot_message)
@@ -420,17 +445,20 @@ if __name__ == '__main__':
                     # Если целевых предметов нет, но есть сообщение от Kiro
                     logger.info("📭 Целевые предметы не найдены в стоке")
                     
-                    # Всё равно отправляем полный сток в бота для мониторинга
-                    if full_content.strip():
-                        bot_message = (
-                            f"📊 <b>Сток от Kiro в {datetime.now().strftime('%H:%M:%S')}</b>\n"
-                            f"🎯 Целевые предметы: не найдены\n\n"
-                            f"📋 <b>Полный сток:</b>\n"
-                            f"<pre>{full_content[:1500]}</pre>"
-                        )
-                        send_to_bot(bot_message)
-                        logger.info("📨 Пустой сток отправлен в бота для мониторинга")
-                        
+                    # Форматируем полный сток
+                    formatted_stock = full_content
+                    if len(formatted_stock) > 3000:
+                        formatted_stock = formatted_stock[:3000] + "\n... (сообщение обрезано)"
+                    
+                    bot_message = (
+                        f"📊 <b>Сток от Kiro в {current_time}</b>\n"
+                        f"🎯 Целевые предметы: не найдены\n\n"
+                        f"📋 <b>Полный сток:</b>\n"
+                        f"<pre>{formatted_stock}</pre>"
+                    )
+                    send_to_bot(bot_message)
+                    logger.info("📨 Пустой сток отправлен в бота для мониторинга")
+                    
             except Exception as e:
                 logger.error(f"💥 Ошибка обработки сообщения: {e}")
                 error_msg = f"⚠️ <b>Ошибка обработки сообщения:</b>\n<code>{str(e)[:200]}</code>"
@@ -449,8 +477,6 @@ if __name__ == '__main__':
         @client.event
         async def on_error(event, *args, **kwargs):
             logger.error(f"⚠️ Discord ошибка в событии: {event}")
-            if len(args) > 0:
-                logger.error(f"Аргументы: {args[0]}")
         
         # Запускаем Discord бота (ОСНОВНОЙ ПОТОК - БЛОКИРУЮЩИЙ)
         logger.info('🔗 Подключение к Discord через WebSocket...')
