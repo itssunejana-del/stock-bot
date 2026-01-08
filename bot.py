@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-🚀 МОНИТОРИНГ KIRO (Основной поток Discord + Flask в фоне)
+🚀 МОНИТОРИНГ KIRO (WebSocket + Полные логи стоков)
 """
 
 import os
@@ -61,7 +61,7 @@ def send_telegram(chat_id, text, parse_mode="HTML"):
         response = requests.post(url, json=data, timeout=10)
         
         if response.status_code == 200:
-            logger.info(f"✅ Telegram отправлено: {text[:50]}...")
+            logger.info(f"✅ Telegram отправлено в {chat_id}: {text[:50]}...")
             return True
         elif response.status_code == 429:
             retry_after = response.json().get('parameters', {}).get('retry_after', 30)
@@ -87,25 +87,40 @@ def send_to_channel(text):
         return send_telegram(TELEGRAM_CHANNEL_ID, text)
     return False
 
+def send_telegram_sticker(chat_id, sticker_id):
+    """Отправляет стикер в Telegram"""
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendSticker"
+        data = {"chat_id": chat_id, "sticker": sticker_id}
+        response = requests.post(url, json=data, timeout=10)
+        return response.status_code == 200
+    except Exception as e:
+        logger.error(f'❌ Ошибка отправки стикера: {e}')
+        return False
+
 # ==================== КОНФИГУРАЦИЯ ПРЕДМЕТОВ ====================
 TARGET_ITEMS = {
     'octobloom': {
         'keywords': ['octobloom', 'октоблум'],
+        'sticker_id': "CAACAgIAAxkBAAEP1btpIXhIEvgVEK4c6ugJv1EgP7UY-wAChokAAtZpCElVMcRUgb_jdDYE",
         'emoji': '🐙',
         'display_name': 'Octobloom'
     },
     'zebrazinkle': {
         'keywords': ['zebrazinkle', 'zebra zinkle'],
+        'sticker_id': "CAACAgIAAxkBAAEPwjJpFDhW_6Vu29vF7DrTHFBcSf_WIAAC1XkAAkCXoUgr50G4SlzwrzYE",
         'emoji': '🦓',
         'display_name': 'Zebrazinkle'
     },
     'firework_fern': {
         'keywords': ['firework fern', 'fireworkfern'],
+        'sticker_id': "CAACAgIAAxkBAAEQHChpUBeOda8Uf0Uwig6BwvkW_z1ndAAC5Y0AAl8dgEoandjqAtpRWTYE",
         'emoji': '🎆',
         'display_name': 'Firework Fern'
     },
     'tomato': {
         'keywords': ['tomato', 'томат', '🍅'],
+        'sticker_id': "CAACAgIAAxkBAAEP1btpIXhIEvgVEK4c6ugJv1EgP7UY-wAChokAAtZpCElVMcRUgb_jdDYE",
         'emoji': '🍅',
         'display_name': 'Tomato'
     }
@@ -202,6 +217,7 @@ def home():
                 <li>🎆 Firework Fern</li>
                 <li>🍅 Tomato (для теста)</li>
             </ul>
+            <p><em>📨 В канал: стикер при находке<br>🤖 В бота: полный сток + уведомление</em></p>
         </div>
         
         <div class="card">
@@ -215,13 +231,13 @@ def home():
             <p><strong>Python:</strong> 3.10.13</p>
             <p><strong>Самопинг:</strong> Каждые 8 минут</p>
             <p><strong>Автопереподключение:</strong> Да</p>
-            <p><strong>Уведомления:</strong> Текст в Telegram</p>
+            <p><strong>Уведомления:</strong> Стикеры в канал + логи в бота</p>
         </div>
         
         <div class="card">
             <h2>🔍 Для тестирования</h2>
             <p><strong>Напиши в Discord канал:</strong> <code>tomato</code> или <code>🍅</code></p>
-            <p><strong>Бот должен отправить:</strong> 2 сообщения в Telegram</p>
+            <p><strong>Бот отправит:</strong> Стикер в канал + полный сток в бота</p>
             <p><a href="/health">Статус здоровья</a> | <a href="/test">Тест работы</a></p>
         </div>
     </body>
@@ -265,6 +281,8 @@ if __name__ == '__main__':
     print(f'📢 Канал Telegram: {TELEGRAM_CHANNEL_ID}')
     print(f'🤖 Бот Telegram: {TELEGRAM_BOT_CHAT_ID}')
     print('🎯 Отслеживаю: 4 предмета (включая томат)')
+    print('📨 В канал: стикеры при находке')
+    print('🤖 В бота: полные логи стоков')
     print('🏓 Самопинг: каждые 8 минут')
     print('=' * 60)
     
@@ -307,6 +325,9 @@ if __name__ == '__main__':
                 f"⏰ Запущен: {bot_start_time.strftime('%H:%M:%S')}\n\n"
                 f"🤖 WebSocket подключение активно\n"
                 f"🏓 Самопинг каждые 8 минут\n"
+                f"📨 <b>Логистика уведомлений:</b>\n"
+                f"• В канал: 🎯 Стикер при находке\n"
+                f"• В бота: 📋 Полный сток + уведомление\n"
                 f"✅ Бот готов к работе!"
             )
         
@@ -327,47 +348,89 @@ if __name__ == '__main__':
                 
                 logger.info(f"📨 Сообщение от Kiro получено")
                 
-                # Извлекаем текст
-                text = message.content.lower() if message.content else ""
+                # Получаем ВСЁ содержимое сообщения
+                full_content = ""
                 
-                # Добавляем текст из эмбедов
-                for embed in message.embeds:
-                    if embed.title:
-                        text += " " + embed.title.lower()
-                    if embed.description:
-                        text += " " + embed.description.lower()
-                    for field in embed.fields:
-                        text += " " + field.name.lower()
-                        text += " " + field.value.lower()
+                # 1. Текст сообщения
+                if message.content:
+                    full_content += f"{message.content}\n\n"
                 
-                logger.info(f"🔍 Проверяю текст: {text[:150]}...")
+                # 2. Эмбеды (основной контент стоков)
+                if message.embeds:
+                    for embed in message.embeds:
+                        if embed.title:
+                            full_content += f"**{embed.title}**\n"
+                        if embed.description:
+                            full_content += f"{embed.description}\n"
+                        if embed.fields:
+                            for field in embed.fields:
+                                full_content += f"\n**{field.name}**\n{field.value}\n"
+                        if embed.footer:
+                            full_content += f"\n{embed.footer.text}\n"
                 
-                # Ищем предметы
+                # Логируем полный контент
+                logger.info(f"📋 Полный сток:\n{full_content[:500]}...")
+                
+                # Ищем целевые предметы
                 found_items = []
+                lower_content = full_content.lower()
+                
                 for item_name, item_config in TARGET_ITEMS.items():
                     for keyword in item_config['keywords']:
-                        if keyword.lower() in text:
+                        if keyword.lower() in lower_content:
                             found_items.append(item_name)
                             logger.info(f"🎯 Найдено: {keyword} → {item_config['display_name']}")
                             break
                 
-                # Обрабатываем найденные предметы
-                for item_name in found_items:
-                    item_config = TARGET_ITEMS[item_name]
-                    found_items_count[item_name] += 1
-                    
+                # Если нашли целевые предметы - отправляем уведомления
+                if found_items:
                     current_time = datetime.now().strftime('%H:%M:%S')
                     
-                    # Логируем
-                    logger.info(f"✅ Найден {item_config['emoji']} {item_config['display_name']} в {current_time}")
+                    # Обрабатываем каждый найденный предмет
+                    for item_name in found_items:
+                        item_config = TARGET_ITEMS[item_name]
+                        found_items_count[item_name] += 1
+                        
+                        # 1. В КАНАЛ: стикер
+                        if 'sticker_id' in item_config and item_config['sticker_id']:
+                            sticker_sent = send_telegram_sticker(TELEGRAM_CHANNEL_ID, item_config['sticker_id'])
+                            if sticker_sent:
+                                logger.info(f"📢 Стикер {item_config['emoji']} отправлен в канал")
+                        
+                        # 2. В КАНАЛ: текстовое уведомление
+                        channel_message = f"{item_config['emoji']} <b>{item_config['display_name']}</b> найден в {current_time}"
+                        send_to_channel(channel_message)
+                        logger.info(f"✅ {item_config['emoji']} {item_config['display_name']} в {current_time}")
                     
-                    # Отправляем в Telegram канал
-                    message_text = f"{item_config['emoji']} <b>{item_config['display_name']}</b> найден в {current_time}"
-                    send_to_channel(message_text)
+                    # 3. В БОТА: полный сток + список найденного
+                    found_items_list = "\n".join([f"• {TARGET_ITEMS[name]['emoji']} {TARGET_ITEMS[name]['display_name']}" for name in found_items])
                     
-                    # Отправляем в личку бота
-                    send_to_bot(f"✅ {item_config['emoji']} {item_config['display_name']} в {current_time}")
+                    bot_message = (
+                        f"🎯 <b>Обнаружены предметы в {current_time}:</b>\n"
+                        f"{found_items_list}\n\n"
+                        f"📋 <b>Полный сток:</b>\n"
+                        f"<pre>{full_content[:1500]}</pre>\n\n"
+                        f"#сток #{current_time.replace(':', '')}"
+                    )
                     
+                    send_to_bot(bot_message)
+                    logger.info(f"📨 Полный сток отправлен в бота ({len(found_items)} предметов)")
+                    
+                else:
+                    # Если целевых предметов нет, но есть сообщение от Kiro
+                    logger.info("📭 Целевые предметы не найдены в стоке")
+                    
+                    # Всё равно отправляем полный сток в бота для мониторинга
+                    if full_content.strip():
+                        bot_message = (
+                            f"📊 <b>Сток от Kiro в {datetime.now().strftime('%H:%M:%S')}</b>\n"
+                            f"🎯 Целевые предметы: не найдены\n\n"
+                            f"📋 <b>Полный сток:</b>\n"
+                            f"<pre>{full_content[:1500]}</pre>"
+                        )
+                        send_to_bot(bot_message)
+                        logger.info("📨 Пустой сток отправлен в бота для мониторинга")
+                        
             except Exception as e:
                 logger.error(f"💥 Ошибка обработки сообщения: {e}")
                 error_msg = f"⚠️ <b>Ошибка обработки сообщения:</b>\n<code>{str(e)[:200]}</code>"
@@ -398,8 +461,3 @@ if __name__ == '__main__':
     except Exception as e:
         logger.error(f"💥 Критическая ошибка запуска Discord: {e}")
         send_to_bot(f"🚨 <b>Критическая ошибка Discord:</b>\n<code>{str(e)[:200]}</code>")
-        
-        # Попытка перезапуска через 60 секунд
-        time.sleep(60)
-        logger.info("🔄 Попытка перезапуска Discord бота...")
-        # Здесь можно добавить логику перезапуска
