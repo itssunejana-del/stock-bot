@@ -121,12 +121,7 @@ TARGET_ITEMS = {
         'emoji': '🎰',
         'display_name': 'Bonanza Bloom'
     },
-    'tomato': {
-        'keywords': ['tomato', 'томат', '🍅'],
-        'sticker_id': "CAACAgIAAxkBAAEP-3lpOtdl3thyaZN8BfxTSAvD6kEkKgACf3sAAoEeWUgkKobs-st7ojYE",
-        'emoji': '🍅',
-        'display_name': 'Tomato'
-    }
+    # Томат удалён из отслеживания
 }
 
 # Инициализируем счетчики
@@ -157,15 +152,24 @@ def self_pinger():
                 if ping_count % 10 == 0:
                     uptime = datetime.now() - bot_start_time
                     hours = uptime.total_seconds() / 3600
+                    
+                    # Формируем статистику найденных предметов
+                    stats = []
+                    for item_name, count in found_items_count.items():
+                        if count > 0:
+                            item = TARGET_ITEMS[item_name]
+                            stats.append(f"{item['emoji']} {item['display_name']}: {count}")
+                    
+                    stats_text = "\n".join(stats) if stats else "Пока ничего не найдено"
+                    
                     status = (
                         f"📊 <b>Статус самопинга #{ping_count}</b>\n"
                         f"⏰ Работает: {hours:.1f} часов\n"
                         f"🕒 Последний пинг: {last_ping_time.strftime('%H:%M:%S')}\n"
                         f"✅ WebSocket активен\n"
-                        f"🍅 Найдено томатов: {found_items_count['tomato']}\n"
-                        f"🐙 Найдено октоблумов: {found_items_count['octobloom']}\n"
-                        f"🦓 Найдено зебразинклов: {found_items_count['zebrazinkle']}\n"
-                        f"🎰 Найдено бонанза блумов: {found_items_count['bonanza_bloom']}"
+                        f"📊 Обработано сообщений: {len(processed_messages)}\n\n"
+                        f"🏆 <b>Найдено предметов:</b>\n"
+                        f"{stats_text}"
                     )
                     send_to_bot(status)
             else:
@@ -257,12 +261,11 @@ def home():
         </div>
         
         <div class="card">
-            <h2>🎯 Отслеживаемые предметы (4 предмета)</h2>
+            <h2>🎯 Отслеживаемые предметы (3 семена)</h2>
             <ul>
                 <li>🐙 Octobloom</li>
                 <li>🦓 Zebrazinkle</li>
                 <li>🎰 Bonanza Bloom</li>
-                <li>🍅 Tomato (для теста)</li>
             </ul>
             <p><em>📨 В канал: ТОЛЬКО стикер<br>🤖 В бота: полный сток + уведомление</em></p>
         </div>
@@ -283,7 +286,12 @@ def home():
         
         <div class="card">
             <h2>🔍 Для тестирования</h2>
-            <p><strong>Напиши в Discord канал:</strong> <code>tomato</code> или <code>🍅</code></p>
+            <p><strong>Отправь в Discord канал сообщение от Kiro с одним из предметов:</strong></p>
+            <ul>
+                <li><code>octobloom</code> или <code>октоблум</code></li>
+                <li><code>zebrazinkle</code></li>
+                <li><code>bonanza bloom</code></li>
+            </ul>
             <p><strong>Бот отправит:</strong> Стикер в канал + полный сток в бота</p>
             <p><a href="/health">Статус здоровья</a> | <a href="/test">Тест работы</a></p>
         </div>
@@ -327,11 +335,10 @@ if __name__ == '__main__':
     print(f'🌱 Канал Discord: {SEEDS_CHANNEL_ID}')
     print(f'📢 Канал Telegram: {TELEGRAM_CHANNEL_ID}')
     print(f'🤖 Бот Telegram: {TELEGRAM_BOT_CHAT_ID}')
-    print('🎯 Отслеживаю: 4 предмета')
+    print('🎯 Отслеживаю: 3 предмета')
     print('   🐙 Octobloom')
     print('   🦓 Zebrazinkle')
     print('   🎰 Bonanza Bloom')
-    print('   🍅 Tomato (для теста)')
     print('📨 В канал: ТОЛЬКО стикер')
     print('🤖 В бота: полный сток + уведомление')
     print('🛡️ Защита от дублей: Да')
@@ -370,7 +377,7 @@ if __name__ == '__main__':
             
             send_to_bot(
                 f"✅ <b>Мониторинг Kiro запущен!</b>\n\n"
-                f"🎯 <b>Отслеживаю 4 предмета:</b>\n"
+                f"🎯 <b>Отслеживаю 3 предмета:</b>\n"
                 f"{items_list}\n\n"
                 f"📢 Канал: {TELEGRAM_CHANNEL_ID}\n"
                 f"🌱 Канал Discord: {SEEDS_CHANNEL_ID}\n"
