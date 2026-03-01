@@ -13,6 +13,7 @@ from datetime import datetime
 import sys
 import logging
 import html
+import asyncio
 
 # ==================== НАСТРОЙКА ЛОГГИНГА ====================
 logging.basicConfig(
@@ -62,7 +63,7 @@ last_ping_time = None
 found_items_count = {}
 processed_messages = set()
 MAX_CACHE_SIZE = 50
-discord_connected = False  # Флаг для отслеживания подключения к Discord
+discord_connected = False
 
 # ==================== КОНФИГУРАЦИЯ ПРЕДМЕТОВ ====================
 TARGET_ITEMS = {
@@ -79,7 +80,7 @@ TARGET_ITEMS = {
         'display_name': 'Cabbage'
     },
     'super_sprinkler': {
-        'keywords': ['super sprinkler'],  # Только точная фраза
+        'keywords': ['super sprinkler'],
         'sticker_id': "CAACAgIAAxkBAAEQnoVpnyH24p9XG865neBZzotLJBqyTwACzp0AAtmT-UgP-Ruhrq3S3joE",
         'emoji': '💧',
         'display_name': 'Super Sprinkler'
@@ -98,7 +99,6 @@ TARGET_ITEMS = {
     }
 }
 
-# Инициализируем счетчики
 for item_name in TARGET_ITEMS.keys():
     found_items_count[item_name] = 0
 
@@ -125,13 +125,11 @@ def send_telegram(chat_id, text, parse_mode="HTML"):
         return False
 
 def send_to_bot(text):
-    """Отправляет сообщение в личку бота"""
     if TELEGRAM_BOT_CHAT_ID:
         return send_telegram(TELEGRAM_BOT_CHAT_ID, text)
     return False
 
 def send_telegram_sticker(chat_id, sticker_id):
-    """Отправляет стикер в Telegram"""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendSticker"
         data = {"chat_id": chat_id, "sticker": sticker_id}
@@ -148,14 +146,11 @@ def send_telegram_sticker(chat_id, sticker_id):
 
 # ==================== ИЗВЛЕЧЕНИЕ ТЕКСТА ====================
 def extract_full_content(message):
-    """Извлекает весь текст из сообщения Discord"""
     full_content = ""
     
-    # 1. Текст сообщения
     if message.content:
         full_content += f"{message.content}\n\n"
     
-    # 2. Эмбеды
     if message.embeds:
         for embed in message.embeds:
             if embed.title:
@@ -168,7 +163,6 @@ def extract_full_content(message):
             if embed.footer and embed.footer.text:
                 full_content += f"\n{embed.footer.text}\n"
     
-    # 3. Очистка
     import re
     full_content = re.sub(r'<:[^:]+:\d+>', '', full_content)
     full_content = re.sub(r'\*\*', '', full_content)
@@ -205,7 +199,6 @@ def self_pinger():
                                 stats.append(f"{item['emoji']} {item['display_name']}: {count}")
                         
                         stats_text = "\n".join(stats) if stats else "Пока ничего не найдено"
-                        
                         discord_status = "✅ Подключен" if discord_connected else "❌ Отключен"
                         
                         status = (
@@ -221,10 +214,6 @@ def self_pinger():
                 else:
                     logger.warning(f"⚠️ Самопинг: статус {response.status_code}")
                     
-            except requests.exceptions.Timeout:
-                logger.warning("⏰ Таймаут самопинга")
-            except requests.exceptions.ConnectionError:
-                logger.warning("🔌 Ошибка соединения при самопинге")
             except Exception as e:
                 logger.error(f"❌ Ошибка запроса самопинга: {e}")
             
@@ -233,11 +222,10 @@ def self_pinger():
             
         except Exception as e:
             logger.error(f"💥 Критическая ошибка в самопинге: {e}")
-            logger.info("🔄 Перезапуск самопинга через 30 секунд...")
             time.sleep(30)
             continue
 
-# ==================== FLASK СЕРВЕР ====================
+# ==================== FLASK ====================
 app = Flask(__name__)
 
 @app.route('/')
@@ -252,7 +240,7 @@ def home():
             stats.append(f"{item['emoji']} {item['display_name']}: {count}")
     
     news_status = "✅ Подключен" if NEWS_CHANNEL_ID else "❌ Не настроен"
-    discord_status = "✅ Подключен" if discord_connected else "❌ Отключен (IP бан)"
+    discord_status = "✅ Подключен" if discord_connected else "❌ Отключен"
     
     return f"""
     <!DOCTYPE html>
@@ -290,11 +278,10 @@ def home():
             <ul>
                 <li>🍒 Cherry</li>
                 <li>🥬 Cabbage</li>
-                <li>💧 Super Sprinkler (только точное совпадение)</li>
+                <li>💧 Super Sprinkler</li>
                 <li>🎋 Bamboo</li>
                 <li>🥭 Mango</li>
             </ul>
-            <p><em>📨 В канал: стикер<br>🤖 В бота: полный сток</em></p>
         </div>
         
         <div class="card">
@@ -303,18 +290,8 @@ def home():
         </div>
         
         <div class="card">
-            <h2>⚙️ Техническая информация</h2>
-            <p><strong>Метод:</strong> WebSocket (disnake)</p>
-            <p><strong>Python:</strong> 3.10.13</p>
-            <p><strong>Самопинг:</strong> Каждые 8 минут</p>
-            <p><strong>Защита от дублей:</strong> Да (кеш 50 сообщений)</p>
-            <p><strong>Уведомления:</strong> Стикеры в канал + полные логи в бота + новости</p>
-        </div>
-        
-        <div class="card">
             <h2>🔍 Тестирование</h2>
-            <p><a href="/health">Статус здоровья</a> | <a href="/test">Тест бота</a> | <a href="/ping">Ping</a> | <a href="/debug">Debug</a></p>
-            <p><em>Сайт работает даже если Discord не подключен!</em></p>
+            <p><a href="/health">Статус здоровья</a> | <a href="/ping">Ping</a> | <a href="/debug">Debug</a></p>
         </div>
     </body>
     </html>
@@ -338,21 +315,12 @@ def health():
         }
     }
 
-@app.route('/test')
-def test():
-    send_to_bot("🧪 <b>Тест от бота!</b>\nЕсли видишь это - бот работает!")
-    return "✅ Тестовое сообщение отправлено в бота"
-
-# ==================== ТЕСТОВЫЕ ЭНДПОИНТЫ ====================
 @app.route('/ping')
 def ping():
-    """Проверка, работает ли Flask"""
     return "pong"
 
 @app.route('/debug')
 def debug():
-    """Проверка переменных окружения"""
-    import os
     return jsonify({
         'status': 'debug',
         'has_discord_token': bool(os.getenv('DISCORD_TOKEN')),
@@ -361,8 +329,7 @@ def debug():
         'stocks_telegram': os.getenv('STOCKS_TELEGRAM_CHANNEL'),
         'news_channel': os.getenv('NEWS_CHANNEL_ID'),
         'news_telegram': os.getenv('NEWS_TELEGRAM_CHANNEL'),
-        'bot_chat_id': os.getenv('TELEGRAM_BOT_CHAT_ID'),
-        'render_service_url': os.getenv('RENDER_SERVICE_URL')
+        'bot_chat_id': os.getenv('TELEGRAM_BOT_CHAT_ID')
     })
 
 # ==================== ЗАПУСК FLASK ====================
@@ -375,6 +342,10 @@ def run_flask():
 # ==================== ЗАПУСК DISCORD БОТА ====================
 def run_discord_bot():
     global discord_connected
+    
+    # СОЗДАЕМ НОВЫЙ EVENT LOOP ДЛЯ ПОТОКА
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     
     try:
         intents = discord.Intents.default()
@@ -417,7 +388,6 @@ def run_discord_bot():
                 
                 # ===== НОВОСТНОЙ КАНАЛ =====
                 if NEWS_CHANNEL_ID and channel_id == NEWS_CHANNEL_ID:
-                    # Защита от дублей
                     if message.id in processed_messages:
                         return
                     
@@ -427,32 +397,25 @@ def run_discord_bot():
                     
                     logger.info(f"📰 Новость в канале {channel_id}")
                     
-                    # Отправляем текст в Telegram
                     if NEWS_TELEGRAM_CHANNEL:
                         news_text = message.content if message.content else "📄 Новость без текста"
-                        
-                        # Добавляем информацию об авторе и времени
                         current_time = datetime.now().strftime('%H:%M:%S')
                         full_news = (
                             f"📰 <b>Новость в {current_time}</b>\n"
                             f"👤 <i>{message.author.name}</i>\n\n"
                             f"{news_text}"
                         )
-                        
                         send_telegram(NEWS_TELEGRAM_CHANNEL, full_news)
-                        logger.info("✅ Новость отправлена в Telegram")
                     
-                    return  # Не обрабатываем как сток
+                    return
                 
                 # ===== КАНАЛ СО СТОКАМИ =====
                 if channel_id != STOCKS_CHANNEL_ID:
                     return
                 
-                # Проверяем автора (ищем Kiro или другого бота)
                 if 'kiro' not in message.author.name.lower():
                     return
                 
-                # Защита от дублей
                 if message.id in processed_messages:
                     logger.info(f"⏭️ Пропускаем дубль {message.id}")
                     return
@@ -468,9 +431,6 @@ def run_discord_bot():
                     logger.info("📭 Сообщение пустое")
                     return
                 
-                logger.info(f"📋 Полный сток ({len(full_content)} символов)")
-                
-                # Ищем предметы
                 found_items = []
                 lower_content = full_content.lower()
                 
@@ -488,18 +448,13 @@ def run_discord_bot():
                         item_config = TARGET_ITEMS[item_name]
                         found_items_count[item_name] += 1
                         
-                        # Стикер в канал
                         if item_config['sticker_id']:
                             send_telegram_sticker(STOCKS_TELEGRAM_CHANNEL, item_config['sticker_id'])
                         
                         logger.info(f"✅ {item_config['emoji']} {item_config['display_name']} в {current_time}")
                     
-                    # Полный сток в бота
                     found_items_list = "\n".join([f"• {TARGET_ITEMS[name]['emoji']} {TARGET_ITEMS[name]['display_name']}" for name in found_items])
-                    
-                    formatted_stock = full_content
-                    if len(formatted_stock) > 3000:
-                        formatted_stock = formatted_stock[:3000] + "\n... (сообщение обрезано)"
+                    formatted_stock = full_content[:3000] + ("..." if len(full_content) > 3000 else "")
                     
                     bot_message = (
                         f"🎯 <b>Обнаружены предметы в {current_time}:</b>\n"
@@ -508,16 +463,11 @@ def run_discord_bot():
                         f"<pre>{formatted_stock}</pre>\n\n"
                         f"#сток"
                     )
-                    
                     send_to_bot(bot_message)
-                    logger.info(f"📨 Полный сток отправлен в бота ({len(found_items)} предметов)")
                     
                 else:
                     logger.info("📭 Целевые предметы не найдены")
-                    
-                    formatted_stock = full_content
-                    if len(formatted_stock) > 3000:
-                        formatted_stock = formatted_stock[:3000] + "\n... (сообщение обрезано)"
+                    formatted_stock = full_content[:3000] + ("..." if len(full_content) > 3000 else "")
                     
                     bot_message = (
                         f"📊 <b>Сток от Kiro в {current_time}</b>\n"
@@ -526,19 +476,17 @@ def run_discord_bot():
                         f"<pre>{formatted_stock}</pre>"
                     )
                     send_to_bot(bot_message)
-                    logger.info("📨 Пустой сток отправлен в бота")
                     
             except Exception as e:
                 logger.error(f"💥 Ошибка обработки сообщения: {e}")
-                error_msg = f"⚠️ <b>Ошибка обработки сообщения:</b>\n<code>{str(e)[:200]}</code>"
-                send_to_bot(error_msg)
+                send_to_bot(f"⚠️ <b>Ошибка:</b>\n<code>{str(e)[:200]}</code>")
         
         @client.event
         async def on_disconnect():
             global discord_connected
             discord_connected = False
             logger.warning("⚠️ Discord WebSocket отключен")
-            send_to_bot("⚠️ <b>Discord WebSocket отключен</b>\nАвтопереподключение...")
+            send_to_bot("⚠️ <b>Discord WebSocket отключен</b>")
         
         @client.event 
         async def on_resumed():
@@ -551,26 +499,20 @@ def run_discord_bot():
         client.run(DISCORD_TOKEN)
         
     except Exception as e:
-        global discord_connected
         discord_connected = False
         logger.error(f"💥 Ошибка подключения к Discord: {e}")
-        send_to_bot(f"🚨 <b>Discord не подключен:</b>\n<code>{str(e)[:200]}</code>\n\nFlask продолжает работу. Повторная попытка через 60 секунд...")
+        send_to_bot(f"🚨 <b>Discord не подключен:</b>\n<code>{str(e)[:200]}</code>\n\nПовтор через 60 сек...")
         
-        # Бесконечный цикл с попытками переподключения
         while True:
-            logger.info("⏳ Ожидание 60 секунд перед следующей попыткой подключения к Discord...")
             time.sleep(60)
-            logger.info("🔄 Повторная попытка подключения к Discord...")
-            
+            logger.info("🔄 Повторная попытка подключения...")
             try:
-                # Рекурсивный вызов с теми же параметрами
                 run_discord_bot()
-                break  # Если подключились, выходим из цикла
-            except Exception as retry_e:
-                logger.error(f"❌ Очередная ошибка подключения: {retry_e}")
+                break
+            except:
                 continue
 
-# ==================== ЗАПУСК ВСЕГО ====================
+# ==================== ЗАПУСК ====================
 if __name__ == '__main__':
     print('=' * 60)
     print('🚀 ЗАПУСК МОНИТОРИНГА НОВОЙ ИГРЫ')
@@ -578,35 +520,24 @@ if __name__ == '__main__':
     print(f'📦 Канал стоков: {STOCKS_CHANNEL_ID}')
     if NEWS_CHANNEL_ID:
         print(f'📰 Канал новостей: {NEWS_CHANNEL_ID}')
-    print('🎯 Отслеживаю 5 предметов:')
-    print('   🍒 Cherry')
-    print('   🥬 Cabbage')
-    print('   💧 Super Sprinkler (только точное совпадение)')
-    print('   🎋 Bamboo')
-    print('   🥭 Mango')
+    print('🎯 Отслеживаю 5 предметов')
     print('📨 В канал стоков: стикер')
     print('🤖 В бота: полный сток + уведомления')
     if NEWS_CHANNEL_ID:
         print('📰 Новости: пересылка в отдельный канал')
-    print('🛡️ Защита от дублей: Да')
-    print('🏓 Самопинг: каждые 8 минут')
     print('=' * 60)
     
-    # Запускаем Flask
     flask_thread = threading.Thread(target=run_flask, daemon=True)
     flask_thread.start()
     
     time.sleep(3)
     
-    # Запускаем самопинг
     ping_thread = threading.Thread(target=self_pinger, daemon=True)
     ping_thread.start()
     
-    # Запускаем Discord бота (в отдельном потоке, чтобы не блокировать)
     discord_thread = threading.Thread(target=run_discord_bot, daemon=True)
     discord_thread.start()
     
-    # Бесконечное ожидание, чтобы главный поток не завершался
     try:
         while True:
             time.sleep(60)
