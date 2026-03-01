@@ -62,6 +62,7 @@ last_ping_time = None
 found_items_count = {}
 processed_messages = set()
 MAX_CACHE_SIZE = 50
+discord_connected = False  # Флаг для отслеживания подключения к Discord
 
 # ==================== КОНФИГУРАЦИЯ ПРЕДМЕТОВ ====================
 TARGET_ITEMS = {
@@ -85,13 +86,13 @@ TARGET_ITEMS = {
     },
     'bamboo': {
         'keywords': ['bamboo', 'bamboo seed', '🎋'],
-        'sticker_id': "CAACAgIAAxkBAAEQnodpnyH9bW44AZ7HvDx91cIfEme3BQACrZgAAhHm6EgK9xH9AAGaNgAEOA",  # Замени на реальный ID
+        'sticker_id': "CAACAgIAAxkBAAEQnodpnyH9bW44AZ7HvDx91cIfEme3BQACrZgAAhHm6EgK9xH9AAGaNgAEOA",
         'emoji': '🎋',
         'display_name': 'Bamboo'
     },
     'mango': {
         'keywords': ['mango', 'mango seed', '🥭'],
-        'sticker_id': "CAACAgIAAxkBAAEQnolpnyH_9X07Hw-t9R-WxqI5lVyy8gACxJgAAl-l6EhRDP07L99KwzgE",  # Замени на реальный ID
+        'sticker_id': "CAACAgIAAxkBAAEQnolpnyH_9X07Hw-t9R-WxqI5lVyy8gACxJgAAl-l6EhRDP07L99KwzgE",
         'emoji': '🥭',
         'display_name': 'Mango'
     }
@@ -178,7 +179,7 @@ def extract_full_content(message):
 
 # ==================== САМОПИНГ ====================
 def self_pinger():
-    global ping_count, last_ping_time
+    global ping_count, last_ping_time, discord_connected
     
     logger.info("🏓 Запуск самопинга (каждые 8 минут)")
     time.sleep(30)
@@ -205,11 +206,13 @@ def self_pinger():
                         
                         stats_text = "\n".join(stats) if stats else "Пока ничего не найдено"
                         
+                        discord_status = "✅ Подключен" if discord_connected else "❌ Отключен"
+                        
                         status = (
                             f"📊 <b>Статус самопинга #{ping_count}</b>\n"
                             f"⏰ Работает: {hours:.1f} часов\n"
                             f"🕒 Последний пинг: {last_ping_time.strftime('%H:%M:%S')}\n"
-                            f"✅ WebSocket активен\n"
+                            f"🔗 Discord: {discord_status}\n"
                             f"📊 Обработано сообщений: {len(processed_messages)}\n\n"
                             f"🏆 <b>Найдено предметов:</b>\n"
                             f"{stats_text}"
@@ -249,6 +252,7 @@ def home():
             stats.append(f"{item['emoji']} {item['display_name']}: {count}")
     
     news_status = "✅ Подключен" if NEWS_CHANNEL_ID else "❌ Не настроен"
+    discord_status = "✅ Подключен" if discord_connected else "❌ Отключен (IP бан)"
     
     return f"""
     <!DOCTYPE html>
@@ -260,6 +264,7 @@ def home():
             body {{ font-family: Arial, sans-serif; padding: 20px; }}
             .card {{ background: #f5f5f5; padding: 20px; border-radius: 10px; margin: 20px 0; }}
             .status-ok {{ color: #2ecc71; font-weight: bold; }}
+            .status-error {{ color: #e74c3c; font-weight: bold; }}
         </style>
     </head>
     <body>
@@ -267,7 +272,8 @@ def home():
         
         <div class="card">
             <h2>📊 Статус системы</h2>
-            <p><strong>Состояние:</strong> <span class="status-ok">✅ WebSocket активен</span></p>
+            <p><strong>Состояние:</strong> <span class="status-ok">✅ Flask работает</span></p>
+            <p><strong>Discord:</strong> <span class="{'status-ok' if discord_connected else 'status-error'}">{discord_status}</span></p>
             <p><strong>Время работы:</strong> {uptime_str}</p>
             <p><strong>Самопингов:</strong> {ping_count}</p>
             <p><strong>Обработано сообщений:</strong> {len(processed_messages)}</p>
@@ -308,6 +314,7 @@ def home():
         <div class="card">
             <h2>🔍 Тестирование</h2>
             <p><a href="/health">Статус здоровья</a> | <a href="/test">Тест бота</a> | <a href="/ping">Ping</a> | <a href="/debug">Debug</a></p>
+            <p><em>Сайт работает даже если Discord не подключен!</em></p>
         </div>
     </body>
     </html>
@@ -322,6 +329,7 @@ def health():
         'ping_count': ping_count,
         'found_items': found_items_count,
         'processed_messages': len(processed_messages),
+        'discord_connected': discord_connected,
         'python_version': '3.10.13',
         'service_url': RENDER_SERVICE_URL,
         'channels': {
@@ -364,39 +372,10 @@ def run_flask():
     logger.info(f'🌐 Веб-сервер запущен на порту {port}')
     serve(app, host='0.0.0.0', port=port)
 
-# ==================== ЗАПУСК ВСЕГО ====================
-if __name__ == '__main__':
-    print('=' * 60)
-    print('🚀 ЗАПУСК МОНИТОРИНГА НОВОЙ ИГРЫ')
-    print('=' * 60)
-    print(f'📦 Канал стоков: {STOCKS_CHANNEL_ID}')
-    if NEWS_CHANNEL_ID:
-        print(f'📰 Канал новостей: {NEWS_CHANNEL_ID}')
-    print('🎯 Отслеживаю 4 предмета:')
-    print('   🍒 Cherry')
-    print('   🥬 Cabbage')
-    print('   💧 Super Sprinkler (только точное совпадение)')
-    print('   🎋 Bamboo')
-    print('   🥭 Mango')
-    print('📨 В канал стоков: стикер')
-    print('🤖 В бота: полный сток + уведомления')
-    if NEWS_CHANNEL_ID:
-        print('📰 Новости: пересылка в отдельный канал')
-    print('🛡️ Защита от дублей: Да')
-    print('🏓 Самопинг: каждые 8 минут')
-    print('=' * 60)
+# ==================== ЗАПУСК DISCORD БОТА ====================
+def run_discord_bot():
+    global discord_connected
     
-    # Запускаем Flask
-    flask_thread = threading.Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    
-    time.sleep(3)
-    
-    # Запускаем самопинг
-    ping_thread = threading.Thread(target=self_pinger, daemon=True)
-    ping_thread.start()
-    
-    # ==================== DISCORD БОТ ====================
     try:
         intents = discord.Intents.default()
         intents.message_content = True
@@ -406,6 +385,8 @@ if __name__ == '__main__':
         
         @client.event
         async def on_ready():
+            global discord_connected
+            discord_connected = True
             logger.info(f'✅ Discord бот {client.user} подключен!')
             
             items_list = "\n".join([
@@ -554,19 +535,80 @@ if __name__ == '__main__':
         
         @client.event
         async def on_disconnect():
+            global discord_connected
+            discord_connected = False
             logger.warning("⚠️ Discord WebSocket отключен")
             send_to_bot("⚠️ <b>Discord WebSocket отключен</b>\nАвтопереподключение...")
         
         @client.event 
         async def on_resumed():
+            global discord_connected
+            discord_connected = True
             logger.info("✅ Discord WebSocket восстановлен")
             send_to_bot("✅ <b>Discord WebSocket восстановлен</b>")
         
         logger.info('🔗 Подключение к Discord...')
         client.run(DISCORD_TOKEN)
         
+    except Exception as e:
+        global discord_connected
+        discord_connected = False
+        logger.error(f"💥 Ошибка подключения к Discord: {e}")
+        send_to_bot(f"🚨 <b>Discord не подключен:</b>\n<code>{str(e)[:200]}</code>\n\nFlask продолжает работу. Повторная попытка через 60 секунд...")
+        
+        # Бесконечный цикл с попытками переподключения
+        while True:
+            logger.info("⏳ Ожидание 60 секунд перед следующей попыткой подключения к Discord...")
+            time.sleep(60)
+            logger.info("🔄 Повторная попытка подключения к Discord...")
+            
+            try:
+                # Рекурсивный вызов с теми же параметрами
+                run_discord_bot()
+                break  # Если подключились, выходим из цикла
+            except Exception as retry_e:
+                logger.error(f"❌ Очередная ошибка подключения: {retry_e}")
+                continue
+
+# ==================== ЗАПУСК ВСЕГО ====================
+if __name__ == '__main__':
+    print('=' * 60)
+    print('🚀 ЗАПУСК МОНИТОРИНГА НОВОЙ ИГРЫ')
+    print('=' * 60)
+    print(f'📦 Канал стоков: {STOCKS_CHANNEL_ID}')
+    if NEWS_CHANNEL_ID:
+        print(f'📰 Канал новостей: {NEWS_CHANNEL_ID}')
+    print('🎯 Отслеживаю 5 предметов:')
+    print('   🍒 Cherry')
+    print('   🥬 Cabbage')
+    print('   💧 Super Sprinkler (только точное совпадение)')
+    print('   🎋 Bamboo')
+    print('   🥭 Mango')
+    print('📨 В канал стоков: стикер')
+    print('🤖 В бота: полный сток + уведомления')
+    if NEWS_CHANNEL_ID:
+        print('📰 Новости: пересылка в отдельный канал')
+    print('🛡️ Защита от дублей: Да')
+    print('🏓 Самопинг: каждые 8 минут')
+    print('=' * 60)
+    
+    # Запускаем Flask
+    flask_thread = threading.Thread(target=run_flask, daemon=True)
+    flask_thread.start()
+    
+    time.sleep(3)
+    
+    # Запускаем самопинг
+    ping_thread = threading.Thread(target=self_pinger, daemon=True)
+    ping_thread.start()
+    
+    # Запускаем Discord бота (в отдельном потоке, чтобы не блокировать)
+    discord_thread = threading.Thread(target=run_discord_bot, daemon=True)
+    discord_thread.start()
+    
+    # Бесконечное ожидание, чтобы главный поток не завершался
+    try:
+        while True:
+            time.sleep(60)
     except KeyboardInterrupt:
         logger.info("🛑 Остановка бота")
-    except Exception as e:
-        logger.error(f"💥 Критическая ошибка: {e}")
-        send_to_bot(f"🚨 <b>Критическая ошибка Discord:</b>\n<code>{str(e)[:200]}</code>")
