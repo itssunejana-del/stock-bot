@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Резервный селф-бот для мониторинга стока
-С универсальным парсером сообщений
+С приоритетом на эмбеды (исправленная версия)
 """
 
 import discord
@@ -48,6 +48,10 @@ ROLE_NAMES = {
     '1442312884859179049': 'Cabbage',
     '1426610862591840266': 'Cherry',
     '1439345675690049666': 'Carrot',
+    # Добавляем новые роли из сообщения
+    '1392620784870101002': 'Mushroom',
+    '1392622053278093473': 'Onion',
+    '1392622157460144198': 'Corn',
 }
 
 # ==================== ЦЕЛЕВЫЕ ПРЕДМЕТЫ ====================
@@ -132,40 +136,19 @@ def send_telegram_sticker(chat_id, sticker_id):
 
 # ==================== УНИВЕРСАЛЬНЫЙ ПАРСЕР ====================
 def extract_full_content(message):
-    """УНИВЕРСАЛЬНЫЙ парсер - вытаскивает текст отовсюду"""
+    """Парсер с приоритетом на эмбеды - сначала самое важное!"""
     full_content = ""
     
-    # 1. Пробуем получить через message.content
-    if message.content:
-        content = message.content
-        for role_id, role_name in ROLE_NAMES.items():
-            content = content.replace(f'<@&{role_id}>', role_name)
-        full_content += f"{content}\n"
-    
-    # 2. Пробуем получить через system_content (для системных сообщений)
-    if hasattr(message, 'system_content') and message.system_content:
-        full_content += f"{message.system_content}\n"
-    
-    # 3. Пробуем получить через clean_content (очищенная версия)
-    if hasattr(message, 'clean_content') and message.clean_content:
-        clean = message.clean_content
-        for role_id, role_name in ROLE_NAMES.items():
-            clean = clean.replace(f'<@&{role_id}>', role_name)
-        full_content += f"{clean}\n"
-    
-    # 4. Эмбеды - все поля
+    # 1. СНАЧАЛА эмбеды - это самое важное (сток)!
     if message.embeds:
         for embed in message.embeds:
-            # Заголовок
             if embed.title:
                 full_content += f"{embed.title}\n"
-            # Описание
             if embed.description:
                 desc = embed.description
                 for role_id, role_name in ROLE_NAMES.items():
                     desc = desc.replace(f'<@&{role_id}>', role_name)
                 full_content += f"{desc}\n"
-            # Поля
             if embed.fields:
                 for field in embed.fields:
                     field_name = field.name
@@ -174,15 +157,27 @@ def extract_full_content(message):
                         field_name = field_name.replace(f'<@&{role_id}>', role_name)
                         field_value = field_value.replace(f'<@&{role_id}>', role_name)
                     full_content += f"{field_name}: {field_value}\n"
-            # Подвал
-            if embed.footer and embed.footer.text:
-                footer = embed.footer.text
-                for role_id, role_name in ROLE_NAMES.items():
-                    footer = footer.replace(f'<@&{role_id}>', role_name)
-                full_content += f"{footer}\n"
     
-    # 5. Компоненты (кнопки, селекты)
-    if hasattr(message, 'components') and message.components:
+    # 2. ПОТОМ обычный текст сообщения
+    if message.content:
+        content = message.content
+        for role_id, role_name in ROLE_NAMES.items():
+            content = content.replace(f'<@&{role_id}>', role_name)
+        full_content += f"{content}\n"
+    
+    # 3. system_content (если есть)
+    if hasattr(message, 'system_content') and message.system_content:
+        full_content += f"{message.system_content}\n"
+    
+    # 4. clean_content (если есть)
+    if hasattr(message, 'clean_content') and message.clean_content:
+        clean = message.clean_content
+        for role_id, role_name in ROLE_NAMES.items():
+            clean = clean.replace(f'<@&{role_id}>', role_name)
+        full_content += f"{clean}\n"
+    
+    # 5. Компоненты (кнопки) - только если ничего другого нет
+    if not full_content.strip() and hasattr(message, 'components') and message.components:
         for component in message.components:
             if hasattr(component, 'children'):
                 for child in component.children:
@@ -191,7 +186,7 @@ def extract_full_content(message):
                     if hasattr(child, 'placeholder') and child.placeholder:
                         full_content += f"{child.placeholder}\n"
     
-    # 6. Пробуем получить через to_dict() (сырые данные)
+    # 6. Сырой словарь (если совсем ничего нет)
     if not full_content.strip():
         try:
             msg_dict = message.to_dict()
@@ -355,15 +350,15 @@ class SelfBot(discord.Client):
             
             full_content = extract_full_content(message)
             
-            # Логируем результат парсинга для отладки
+            # Логируем результат парсинга
             if full_content:
                 logger.info(f"✅ Текст извлечен: {full_content[:100]}...")
             else:
                 logger.warning("❌ НЕ УДАЛОСЬ извлечь текст")
-                # Отправляем предупреждение
                 send_telegram(TELEGRAM_BOT_CHAT_ID, f"⚠️ Не удалось извлечь текст из сообщения {message.id}")
                 return
             
+            # Поиск целевых предметов
             found_items = []
             lower_content = full_content.lower()
             
