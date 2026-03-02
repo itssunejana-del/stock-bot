@@ -131,7 +131,7 @@ class SelfBot(discord.Client):
                     if message.id in self.processed_messages:
                         continue
                     
-                    if 'kiro' not in message.author.name.lower():
+                    if 'dawn' not in message.author.name.lower():
                         continue
                     
                     logger.info(f"📨 Сообщение от Kiro (ID: {message.id})")
