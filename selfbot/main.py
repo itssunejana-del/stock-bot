@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Резервный селф-бот для мониторинга стока
+Резервный селф-бот для мониторинга стока (исправленная версия с Dawn)
 """
 
 import discord
@@ -47,7 +47,7 @@ def send_telegram_sticker(chat_id, sticker_id):
         logger.error(f'❌ Sticker error: {e}')
         return False
 
-# Ваши целевые предметы
+# Твои целевые предметы
 TARGET_ITEMS = {
     'cherry': {
         'keywords': ['cherry', '🍒'],
@@ -125,22 +125,25 @@ class SelfBot(discord.Client):
                     await asyncio.sleep(60)
                     continue
                 
+                # Получаем последние 3 сообщения (исправленный синтаксис)
                 messages = [msg async for msg in channel.history(limit=3)]
                 
                 for message in messages:
                     if message.id in self.processed_messages:
                         continue
                     
+                    # 🔴 ИСПРАВЛЕНО: теперь ищем Dawn, а не Kiro
                     if 'dawn' not in message.author.name.lower():
                         continue
                     
-                    logger.info(f"📨 Сообщение от Kiro (ID: {message.id})")
+                    logger.info(f"📨 Сообщение от Dawn (ID: {message.id})")
                     await self.process_stock_message(message)
                     
                     self.processed_messages.add(message.id)
                     if len(self.processed_messages) > self.max_cache_size:
                         self.processed_messages.pop()
                 
+                # Случайная задержка 25-35 секунд
                 delay = random.uniform(25, 35)
                 logger.info(f"💤 Следующая проверка через {delay:.1f} сек")
                 await asyncio.sleep(delay)
@@ -187,6 +190,7 @@ class SelfBot(discord.Client):
                 )
                 send_telegram(TELEGRAM_BOT_CHAT_ID, bot_message)
             else:
+                # Можно закомментировать, если не хочешь получать пустые уведомления
                 bot_message = (
                     f"📊 <b>Сток в {current_time}</b>\n"
                     f"🎯 Целевые предметы: не найдены\n\n"
