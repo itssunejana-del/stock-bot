@@ -1,1 +1,1 @@
-# stoc-bo
+# stock-bot
