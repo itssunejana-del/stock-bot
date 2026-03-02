@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Резервный селф-бот для мониторинга стока
-С принудительным получением свежих сообщений
+С принудительной отправкой ссылок на все сообщения
 """
 
 import discord
@@ -164,8 +164,8 @@ def extract_full_content(message):
             content = content.replace(f'<@&{role_id}>', role_name)
         full_content += f"{content}\n"
     
-    # Кнопки (только если нет другого текста)
-    if not full_content.strip() and hasattr(message, 'components') and message.components:
+    # Кнопки
+    if hasattr(message, 'components') and message.components:
         for component in message.components:
             if hasattr(component, 'children'):
                 for child in component.children:
@@ -205,7 +205,8 @@ class SelfBot(discord.Client):
             f"📊 Статус: ✅ Подключен к Discord\n"
             f"📡 Канал: {self.channel_id}\n"
             f"💾 В памяти: {len(self.processed_messages)} сообщений\n\n"
-            f"🔍 Отслеживаю: 🍒 🥬 🎋 🥭"
+            f"🔍 Отслеживаю: 🍒 🥬 🎋 🥭\n\n"
+            f"📎 На каждое сообщение буду присылать ссылку"
         )
         send_telegram(TELEGRAM_BOT_CHAT_ID, test_message)
         
@@ -301,7 +302,7 @@ class SelfBot(discord.Client):
         try:
             logger.info(f"🔍 Обработка сообщения {message.id}")
             
-            # Пробуем получить свежую копию сообщения
+            # Всегда получаем свежую копию
             try:
                 channel = await self.fetch_channel(self.channel_id)
                 fresh_message = await channel.fetch_message(message.id)
@@ -310,60 +311,64 @@ class SelfBot(discord.Client):
             except Exception as e:
                 logger.warning(f"⚠️ Не удалось получить свежую копию: {e}")
             
+            # Извлекаем текст
             full_content = extract_full_content(message)
             
+            # Формируем ссылку на сообщение
+            guild_id = message.guild.id if message.guild else '@me'
+            msg_link = f"https://discord.com/channels/{guild_id}/{self.channel_id}/{message.id}"
+            
+            # ВСЕГДА отправляем ссылку в Telegram
+            link_message = f"🔗 <b>Новое сообщение от Dawn</b>\nID: {message.id}\nСсылка: {msg_link}"
+            send_telegram(TELEGRAM_BOT_CHAT_ID, link_message)
+            
+            # Если есть текст - отправляем и его тоже
             if full_content:
                 logger.info(f"✅ Текст извлечен: {full_content[:100]}...")
-            else:
-                logger.warning("❌ НЕ УДАЛОСЬ извлечь текст")
                 
-                # Отправляем ссылку на сообщение
-                guild_id = message.guild.id if message.guild else '@me'
-                msg_link = f"https://discord.com/channels/{guild_id}/{self.channel_id}/{message.id}"
-                warn_msg = f"⚠️ Пустое сообщение от Dawn (ID: {message.id})\n🔗 {msg_link}"
-                send_telegram(TELEGRAM_BOT_CHAT_ID, warn_msg)
-                return
-            
-            found_items = []
-            lower_content = full_content.lower()
-            
-            for item_name, item_config in TARGET_ITEMS.items():
-                for keyword in item_config['keywords']:
-                    if keyword.lower() in lower_content:
-                        found_items.append(item_name)
-                        logger.info(f"✅ НАЙДЕНО: {item_config['display_name']}")
-                        break
-            
-            current_time = datetime.now().strftime('%H:%M:%S')
-            safe_content = html.escape(full_content[:1500])
-            
-            if found_items:
-                for item_name in found_items:
-                    item_config = TARGET_ITEMS[item_name]
-                    self.found_items_count[item_name] += 1
+                found_items = []
+                lower_content = full_content.lower()
+                
+                for item_name, item_config in TARGET_ITEMS.items():
+                    for keyword in item_config['keywords']:
+                        if keyword.lower() in lower_content:
+                            found_items.append(item_name)
+                            logger.info(f"✅ НАЙДЕНО: {item_config['display_name']}")
+                            break
+                
+                current_time = datetime.now().strftime('%H:%M:%S')
+                safe_content = html.escape(full_content[:1500])
+                
+                if found_items:
+                    for item_name in found_items:
+                        item_config = TARGET_ITEMS[item_name]
+                        self.found_items_count[item_name] += 1
+                        
+                        if item_config['sticker_id']:
+                            logger.info(f"🎨 Отправляю стикер для {item_config['display_name']}")
+                            send_telegram_sticker(STOCKS_TELEGRAM_CHANNEL, item_config['sticker_id'])
                     
-                    if item_config['sticker_id']:
-                        logger.info(f"🎨 Отправляю стикер для {item_config['display_name']}")
-                        send_telegram_sticker(STOCKS_TELEGRAM_CHANNEL, item_config['sticker_id'])
+                    found_items_list = "\n".join([f"• {TARGET_ITEMS[name]['emoji']} {TARGET_ITEMS[name]['display_name']}" for name in found_items])
+                    
+                    bot_message = (
+                        f"🎯 <b>Найдены предметы в {current_time}</b>\n"
+                        f"{found_items_list}\n\n"
+                        f"📋 <b>Сток:</b>\n"
+                        f"<pre>{safe_content}</pre>"
+                    )
+                else:
+                    bot_message = (
+                        f"📊 <b>Сток в {current_time}</b>\n"
+                        f"🎯 Целевые предметы: не найдены\n\n"
+                        f"📋 <b>Сток:</b>\n"
+                        f"<pre>{safe_content}</pre>"
+                    )
                 
-                found_items_list = "\n".join([f"• {TARGET_ITEMS[name]['emoji']} {TARGET_ITEMS[name]['display_name']}" for name in found_items])
-                
-                bot_message = (
-                    f"🎯 <b>Найдены предметы в {current_time}</b>\n"
-                    f"{found_items_list}\n\n"
-                    f"📋 <b>Сток:</b>\n"
-                    f"<pre>{safe_content}</pre>"
-                )
+                send_telegram(TELEGRAM_BOT_CHAT_ID, bot_message)
             else:
-                bot_message = (
-                    f"📊 <b>Сток в {current_time}</b>\n"
-                    f"🎯 Целевые предметы: не найдены\n\n"
-                    f"📋 <b>Сток:</b>\n"
-                    f"<pre>{safe_content}</pre>"
-                )
+                logger.warning("❌ Текст не извлечен, отправлена только ссылка")
             
-            send_telegram(TELEGRAM_BOT_CHAT_ID, bot_message)
-            logger.info(f"✅ Сообщение {message.id} обработано")
+            logger.info(f"✅ Сообщение {message.id} обработано (ссылка отправлена)")
             
         except Exception as e:
             logger.error(f"💥 Ошибка обработки: {e}")
