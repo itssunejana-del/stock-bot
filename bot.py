@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-🚀 МОНИТОРИНГ ДЛЯ НОВОЙ ИГРЫ (два канала: стоки + новости)
+🚀 МОНИТОРИНГ ДЛЯ НОВОЙ ИГРЫ (Cherry, Cabbage, Bamboo, Mango)
 """
 
 import os
@@ -30,7 +30,7 @@ TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_BOT_CHAT_ID = os.getenv('TELEGRAM_BOT_CHAT_ID')
 RENDER_SERVICE_URL = os.getenv('RENDER_SERVICE_URL', 'https://stock-bot-cj4s.onrender.com')
 
-# НОВЫЕ ПЕРЕМЕННЫЕ:
+# Каналы
 STOCKS_CHANNEL_ID = os.getenv('STOCKS_CHANNEL_ID')           # ID канала со стоками
 STOCKS_TELEGRAM_CHANNEL = os.getenv('STOCKS_TELEGRAM_CHANNEL')  # Куда отправлять стикеры
 NEWS_CHANNEL_ID = os.getenv('NEWS_CHANNEL_ID')               # ID новостного канала
@@ -40,7 +40,12 @@ NEWS_TELEGRAM_CHANNEL = os.getenv('NEWS_TELEGRAM_CHANNEL')   # Куда отпр
 REQUIRED_VARS = ['DISCORD_TOKEN', 'TELEGRAM_TOKEN', 'STOCKS_CHANNEL_ID', 'STOCKS_TELEGRAM_CHANNEL']
 missing = [var for var in REQUIRED_VARS if not os.getenv(var)]
 if missing:
-    logger.error(f'❌ Отсутствуют переменные: {missing}')
+    logger.error(f'❌ Отсутствуют обязательные переменные: {missing}')
+    exit(1)
+
+# Проверка новостного канала (опционально)
+if os.getenv('NEWS_CHANNEL_ID') and not os.getenv('NEWS_TELEGRAM_CHANNEL'):
+    logger.error('❌ Указан NEWS_CHANNEL_ID, но нет NEWS_TELEGRAM_CHANNEL')
     exit(1)
 
 logger.info(f"📦 Канал стоков: {STOCKS_CHANNEL_ID}")
@@ -72,11 +77,17 @@ TARGET_ITEMS = {
         'emoji': '🥬',
         'display_name': 'Cabbage'
     },
-    'super_sprinkler': {
-        'keywords': ['super sprinkler'],  # Только точная фраза
-        'sticker_id': "CAACAgIAAxkBAAEQnoVpnyH24p9XG865neBZzotLJBqyTwACzp0AAtmT-UgP-Ruhrq3S3joE",
-        'emoji': '💧',
-        'display_name': 'Super Sprinkler'
+    'bamboo': {
+        'keywords': ['bamboo', 'bamboo seed', '🎋'],
+        'sticker_id': "CAACAgIAAxkBAAEQpw1ppGFmoB8w-C71IZOkeBOG029w5QAC4psAAsOUIEnsw-M936B9BjoE",
+        'emoji': '🎋',
+        'display_name': 'Bamboo'
+    },
+    'mango': {
+        'keywords': ['mango', 'mango seed', '🥭'],
+        'sticker_id': "CAACAgIAAxkBAAEQpw9ppGFstEgOkpR-HLILv_ugOZVViQACkZYAAu_cIUnaEdl_e13gzDoE",
+        'emoji': '🥭',
+        'display_name': 'Mango'
     }
 }
 
@@ -263,11 +274,12 @@ def home():
         </div>
         
         <div class="card">
-            <h2>🎯 Отслеживаемые предметы</h2>
+            <h2>🎯 Отслеживаемые предметы (4 предмета)</h2>
             <ul>
                 <li>🍒 Cherry</li>
                 <li>🥬 Cabbage</li>
-                <li>💧 Super Sprinkler (только точное совпадение)</li>
+                <li>🎋 Bamboo</li>
+                <li>🥭 Mango</li>
             </ul>
             <p><em>📨 В канал: стикер<br>🤖 В бота: полный сток</em></p>
         </div>
@@ -283,7 +295,6 @@ def home():
             <p><strong>Python:</strong> 3.10.13</p>
             <p><strong>Самопинг:</strong> Каждые 8 минут</p>
             <p><strong>Защита от дублей:</strong> Да (кеш 50 сообщений)</p>
-            <p><strong>Уведомления:</strong> Стикеры в канал + полные логи в бота + новости</p>
         </div>
         
         <div class="card">
@@ -331,10 +342,11 @@ if __name__ == '__main__':
     print(f'📦 Канал стоков: {STOCKS_CHANNEL_ID}')
     if NEWS_CHANNEL_ID:
         print(f'📰 Канал новостей: {NEWS_CHANNEL_ID}')
-    print('🎯 Отслеживаю:')
+    print('🎯 Отслеживаю 4 предмета:')
     print('   🍒 Cherry')
     print('   🥬 Cabbage')
-    print('   💧 Super Sprinkler (только точное совпадение)')
+    print('   🎋 Bamboo')
+    print('   🥭 Mango')
     print('📨 В канал стоков: стикер')
     print('🤖 В бота: полный сток + уведомления')
     if NEWS_CHANNEL_ID:
@@ -372,7 +384,7 @@ if __name__ == '__main__':
             
             msg = (
                 f"✅ <b>Мониторинг новой игры запущен!</b>\n\n"
-                f"🎯 <b>Отслеживаю:</b>\n{items_list}\n\n"
+                f"🎯 <b>Отслеживаю 4 предмета:</b>\n{items_list}\n\n"
                 f"📦 Канал стоков: {STOCKS_CHANNEL_ID}\n"
             )
             if NEWS_CHANNEL_ID:
@@ -424,7 +436,8 @@ if __name__ == '__main__':
                 if channel_id != STOCKS_CHANNEL_ID:
                     return
                 
-                # Проверяем автора (ищем Kiro или другого бота)
+                # Проверяем автора (бот Kiro или другой)
+                # Для новой игры может быть другой бот, оставляем проверку на kiro
                 if 'kiro' not in message.author.name.lower():
                     return
                 
@@ -437,7 +450,7 @@ if __name__ == '__main__':
                 if len(processed_messages) > MAX_CACHE_SIZE:
                     processed_messages.remove(next(iter(processed_messages)))
                 
-                logger.info(f"📨 Сообщение от Kiro (ID: {message.id})")
+                logger.info(f"📨 Сообщение от бота (ID: {message.id})")
                 
                 full_content = extract_full_content(message)
                 if not full_content:
@@ -496,7 +509,7 @@ if __name__ == '__main__':
                         formatted_stock = formatted_stock[:3000] + "\n... (сообщение обрезано)"
                     
                     bot_message = (
-                        f"📊 <b>Сток от Kiro в {current_time}</b>\n"
+                        f"📊 <b>Сток в {current_time}</b>\n"
                         f"🎯 Целевые предметы: не найдены\n\n"
                         f"📋 <b>Полный сток:</b>\n"
                         f"<pre>{formatted_stock}</pre>"
