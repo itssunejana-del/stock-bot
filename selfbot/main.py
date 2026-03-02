@@ -135,82 +135,43 @@ def send_telegram_sticker(chat_id, sticker_id):
 
 # ==================== ПРАВИЛЬНЫЙ ПАРСЕР ДЛЯ СООБЩЕНИЙ DAWN ====================
 def extract_full_content(message):
-    """ОТЛАДОЧНАЯ версия - показывает всех детей"""
+    """ОТЛАДКА: ищем компоненты Text Display (type 10)"""
     result = []
     
     result.append(f"=== СООБЩЕНИЕ ID: {message.id} ===")
     result.append(f"Автор: {message.author.name}")
-    result.append(f"Канал: {message.channel.id}")
     
-    # ПРОВЕРЯЕМ КОМПОНЕНТЫ
     if hasattr(message, 'components') and message.components:
-        result.append(f"КОМПОНЕНТОВ ВСЕГО: {len(message.components)}")
+        result.append(f"ВСЕГО КОМПОНЕНТОВ: {len(message.components)}")
         
-        for i, main_comp in enumerate(message.components):
-            result.append(f"")
-            result.append(f"--- ГЛАВНЫЙ КОМПОНЕНТ {i} ---")
-            result.append(f"Тип: {main_comp.type}")
-            
-            # Проверяем детей (children)
-            if hasattr(main_comp, 'children') and main_comp.children:
-                result.append(f"ДЕТЕЙ (children): {len(main_comp.children)}")
+        def scan_components(comp_list, depth=0):
+            indent = "  " * depth
+            for idx, comp in enumerate(comp_list):
+                result.append(f"{indent}КОМПОНЕНТ {idx}: type={comp.type}")
                 
-                for j, child in enumerate(main_comp.children):
-                    result.append(f"")
-                    result.append(f"  >>> РЕБЕНОК {j} <<<")
-                    result.append(f"  Тип: {child.type}")
-                    
-                    # Все возможные места для текста
-                    if hasattr(child, 'content') and child.content:
-                        result.append(f"  CONTENT: {child.content}")
-                    
-                    if hasattr(child, 'label') and child.label:
-                        result.append(f"  LABEL: {child.label}")
-                    
-                    if hasattr(child, 'value') and child.value:
-                        result.append(f"  VALUE: {child.value}")
-                    
-                    if hasattr(child, 'placeholder') and child.placeholder:
-                        result.append(f"  PLACEHOLDER: {child.placeholder}")
-                    
-                    if hasattr(child, 'text') and child.text:
-                        result.append(f"  TEXT: {child.text}")
-            
-            # Проверяем дочерние компоненты (components)
-            if hasattr(main_comp, 'components') and main_comp.components:
-                result.append(f"ДОЧЕРНИХ КОМПОНЕНТОВ: {len(main_comp.components)}")
+                # Если это Text Display (type 10) - это наш текст!
+                if hasattr(comp, 'type') and comp.type == 10:
+                    if hasattr(comp, 'content'):
+                        result.append(f"{indent}  🔥 ТЕКСТ НАЙДЕН! 🔥")
+                        result.append(f"{indent}  Содержимое: {comp.content}")
                 
-                for j, sub_comp in enumerate(main_comp.components):
-                    result.append(f"")
-                    result.append(f"  >>> ПОДКОМПОНЕНТ {j} <<<")
-                    result.append(f"  Тип: {sub_comp.type}")
-                    
-                    if hasattr(sub_comp, 'content') and sub_comp.content:
-                        result.append(f"  CONTENT: {sub_comp.content}")
-                    
-                    if hasattr(sub_comp, 'label') and sub_comp.label:
-                        result.append(f"  LABEL: {sub_comp.label}")
-    
-    else:
-        result.append("КОМПОНЕНТОВ НЕТ")
-    
-    # ПРОВЕРЯЕМ ОБЫЧНЫЙ ТЕКСТ
-    if message.content:
-        result.append(f"")
-        result.append("--- ОБЫЧНЫЙ ТЕКСТ ---")
-        result.append(message.content)
-    
-    # ПРОВЕРЯЕМ ЭМБЕДЫ
-    if message.embeds:
-        result.append(f"")
-        result.append(f"ЭМБЕДОВ: {len(message.embeds)}")
-        for k, embed in enumerate(message.embeds):
-            result.append(f"")
-            result.append(f"  === EMBED {k} ===")
-            if embed.title:
-                result.append(f"  Title: {embed.title}")
-            if embed.description:
-                result.append(f"  Description: {embed.description}")
+                # Проверяем другие поля
+                if hasattr(comp, 'content') and comp.content:
+                    result.append(f"{indent}  content: {comp.content[:100]}")
+                if hasattr(comp, 'label'):
+                    result.append(f"{indent}  label: {comp.label}")
+                if hasattr(comp, 'custom_id'):
+                    result.append(f"{indent}  custom_id: {comp.custom_id}")
+                
+                # Рекурсивно проверяем вложенные компоненты
+                if hasattr(comp, 'components') and comp.components:
+                    result.append(f"{indent}  вложенных: {len(comp.components)}")
+                    scan_components(comp.components, depth + 2)
+                if hasattr(comp, 'children') and comp.children:
+                    result.append(f"{indent}  детей: {len(comp.children)}")
+                    scan_components(comp.children, depth + 2)
+        
+        scan_components(message.components)
     
     return "\n".join(result)
 
