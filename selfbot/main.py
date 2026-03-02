@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Резервный селф-бот для мониторинга стока
-С исправленной функцией извлечения текста и точным временем
+С WebSocket подключением и полной обработкой ошибок
 """
 
 import discord
@@ -10,10 +10,11 @@ import asyncio
 import requests
 import random
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 import html
 import re
+import json
 
 from flask import Flask
 import threading
@@ -77,17 +78,35 @@ TARGET_ITEMS = {
     }
 }
 
+# ==================== ФАЙЛ СОСТОЯНИЯ ====================
+STATE_FILE = 'bot_state.json'
+
+def load_state():
+    try:
+        if os.path.exists(STATE_FILE):
+            with open(STATE_FILE, 'r') as f:
+                return json.load(f)
+    except:
+        pass
+    return {'processed_messages': []}
+
+def save_state(state):
+    try:
+        with open(STATE_FILE, 'w') as f:
+            json.dump(state, f)
+    except:
+        pass
+
 # ==================== TELEGRAM ФУНКЦИИ ====================
 def send_telegram(chat_id, text, parse_mode="HTML"):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         data = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
-        logger.info(f"📤 Отправляю в Telegram: {text[:50]}...")
         
         response = requests.post(url, json=data, timeout=10)
         
         if response.status_code == 200:
-            logger.info(f"✅ Telegram отправлено в {chat_id}")
+            logger.info(f"✅ Telegram отправлено")
             return True
         elif response.status_code == 429:
             retry_after = response.json().get('parameters', {}).get('retry_after', 30)
@@ -95,7 +114,7 @@ def send_telegram(chat_id, text, parse_mode="HTML"):
             time.sleep(retry_after)
             return False
         else:
-            logger.error(f"❌ Telegram ошибка {response.status_code}: {response.text[:100]}")
+            logger.error(f"❌ Telegram ошибка {response.status_code}")
             return False
     except Exception as e:
         logger.error(f'❌ Telegram error: {e}')
@@ -106,29 +125,32 @@ def send_telegram_sticker(chat_id, sticker_id):
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendSticker"
         data = {"chat_id": chat_id, "sticker": sticker_id}
         response = requests.post(url, json=data, timeout=10)
-        if response.status_code == 200:
-            logger.info(f"📢 Стикер отправлен в канал")
-            return True
-        else:
-            logger.error(f"❌ Ошибка отправки стикера: {response.status_code}")
-            return False
+        return response.status_code == 200
     except Exception as e:
-        logger.error(f'❌ Ошибка отправки стикера: {e}')
+        logger.error(f'❌ Sticker error: {e}')
         return False
 
 # ==================== ИСПРАВЛЕННАЯ ФУНКЦИЯ ИЗВЛЕЧЕНИЯ ТЕКСТА ====================
 def extract_full_content(message):
-    """Извлекает весь текст из сообщения Discord и заменяет роли на названия"""
+    """Извлекает весь текст из сообщения Discord"""
     full_content = ""
     
-    # Обрабатываем основной текст сообщения
+    # 1. Пробуем получить текст из компонентов (кнопки, селекты)
+    if hasattr(message, 'components') and message.components:
+        for component in message.components:
+            if hasattr(component, 'children'):
+                for child in component.children:
+                    if hasattr(child, 'label') and child.label:
+                        full_content += f"{child.label}\n"
+    
+    # 2. Обычный текст сообщения
     if message.content:
         content = message.content
         for role_id, role_name in ROLE_NAMES.items():
             content = content.replace(f'<@&{role_id}>', role_name)
-        full_content += f"{content}\n\n"
+        full_content += f"{content}\n"
     
-    # Обрабатываем эмбеды
+    # 3. Эмбеды
     if message.embeds:
         for embed in message.embeds:
             if embed.title:
@@ -152,10 +174,10 @@ def extract_full_content(message):
                     footer = footer.replace(f'<@&{role_id}>', role_name)
                 full_content += f"{footer}\n"
     
-    # Очистка от лишнего
+    # Очистка
     full_content = re.sub(r'<:[^:]+:\d+>', '', full_content)
     full_content = re.sub(r'\*\*', '', full_content)
-    full_content = re.sub(r'<t:\d+:[A-Za-z]+>', '', full_content)  # убираем временные метки
+    full_content = re.sub(r'<t:\d+:[A-Za-z]+>', '', full_content)
     full_content = html.escape(full_content)
     full_content = '\n'.join([line.strip() for line in full_content.split('\n') if line.strip()])
     
@@ -165,83 +187,105 @@ def extract_full_content(message):
 class SelfBot(discord.Client):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.processed_messages = set()
+        
+        # Загружаем состояние
+        state = load_state()
+        self.processed_messages = set(state.get('processed_messages', []))
         self.found_items_count = {name: 0 for name in TARGET_ITEMS.keys()}
         self.channel_id = int(os.getenv('STOCKS_CHANNEL_ID'))
-        self.max_cache_size = 50
+        self.max_cache_size = 100
         self.started = False
+        self.last_error_time = None
         
     async def on_ready(self):
         logger.info(f'✅ Резервный селф-бот {self.user} запущен!')
         
         # Тестовое сообщение при запуске
-        if not self.started:
-            current_time = datetime.now().strftime('%H:%M:%S')
-            test_message = (
-                f"🤖 <b>Бот запущен!</b>\n"
-                f"⏰ Время: {current_time}\n"
-                f"📊 Статус: ✅ Подключен к Discord\n"
-                f"📡 Канал: {self.channel_id}\n\n"
-                f"🔍 Отслеживаю: 🍒 🥬 🎋 🥭"
-            )
-            send_telegram(TELEGRAM_BOT_CHAT_ID, test_message)
-            self.started = True
+        current_time = datetime.now().strftime('%H:%M:%S')
+        test_message = (
+            f"🤖 <b>Бот запущен!</b>\n"
+            f"⏰ Время: {current_time}\n"
+            f"📊 Статус: ✅ Подключен к Discord\n"
+            f"📡 Канал: {self.channel_id}\n"
+            f"💾 В памяти: {len(self.processed_messages)} сообщений\n\n"
+            f"🔍 Отслеживаю: 🍒 🥬 🎋 🥭"
+        )
+        send_telegram(TELEGRAM_BOT_CHAT_ID, test_message)
         
-        self.loop.create_task(self.poll_channel())
+        # Сохраняем состояние каждые 5 минут
+        self.loop.create_task(self.auto_save())
     
-    async def poll_channel(self):
-        await self.wait_until_ready()
-        
+    async def auto_save(self):
+        """Автоматическое сохранение состояния"""
         while not self.is_closed():
-            try:
-                channel = self.get_channel(self.channel_id)
-                if not channel:
-                    logger.error(f"❌ Канал {self.channel_id} не найден")
-                    await asyncio.sleep(60)
-                    continue
-                
-                messages = [msg async for msg in channel.history(limit=3)]
-                
-                for message in messages:
-                    if message.id in self.processed_messages:
-                        continue
-                    
-                    if 'dawn' not in message.author.name.lower():
-                        continue
-                    
-                    logger.info(f"📨 Сообщение от Dawn (ID: {message.id})")
-                    
-                    # Уведомление о получении сообщения
-                    notify = f"📥 Получено сообщение от Dawn (ID: {message.id})"
-                    send_telegram(TELEGRAM_BOT_CHAT_ID, notify)
-                    
-                    await self.process_stock_message(message)
-                    
-                    self.processed_messages.add(message.id)
-                    if len(self.processed_messages) > self.max_cache_size:
-                        self.processed_messages.pop()
-                
-                delay = random.uniform(25, 35)
-                logger.info(f"💤 Следующая проверка через {delay:.1f} сек")
-                await asyncio.sleep(delay)
-                
-            except Exception as e:
-                logger.error(f"❌ Ошибка в poll_channel: {e}")
-                await asyncio.sleep(60)
+            await asyncio.sleep(300)  # 5 минут
+            state = {'processed_messages': list(self.processed_messages)[-self.max_cache_size:]}
+            save_state(state)
+            logger.info("💾 Состояние сохранено")
+    
+    async def on_message(self, message):
+        """Обработка новых сообщений (WebSocket режим)"""
+        try:
+            # Проверяем канал и автора
+            if message.channel.id != self.channel_id:
+                return
+            
+            if 'dawn' not in message.author.name.lower():
+                return
+            
+            # Защита от дублей
+            if message.id in self.processed_messages:
+                logger.info(f"⏭️ Дубль сообщения {message.id}")
+                return
+            
+            logger.info(f"📨 НОВОЕ сообщение от Dawn (ID: {message.id})")
+            
+            # Обрабатываем сообщение
+            await self.process_stock_message(message)
+            
+            # Добавляем в обработанные
+            self.processed_messages.add(message.id)
+            if len(self.processed_messages) > self.max_cache_size:
+                self.processed_messages.pop()
+            
+            # Сохраняем состояние
+            state = {'processed_messages': list(self.processed_messages)[-self.max_cache_size:]}
+            save_state(state)
+            
+        except Exception as e:
+            logger.error(f"❌ Ошибка в on_message: {e}")
+            await self.handle_error(f"Ошибка обработки сообщения: {e}")
+    
+    async def on_disconnect(self):
+        """При отключении от Discord"""
+        logger.warning("⚠️ Отключение от Discord")
+        await self.handle_error("⚠️ Потеря соединения с Discord. Переподключаюсь...")
+    
+    async def on_error(self, event, *args, **kwargs):
+        """Обработка ошибок Discord"""
+        logger.error(f"❌ Ошибка Discord: {event}")
+        await self.handle_error(f"Ошибка Discord: {event}")
+    
+    async def handle_error(self, error_text):
+        """Отправка уведомления об ошибке (не чаще раза в минуту)"""
+        now = datetime.now()
+        if self.last_error_time and (now - self.last_error_time).seconds < 60:
+            return
+        
+        self.last_error_time = now
+        send_telegram(TELEGRAM_BOT_CHAT_ID, f"🚨 <b>ВНИМАНИЕ!</b>\n{error_text}")
     
     async def process_stock_message(self, message):
+        """Обработка сообщения со стоком"""
         try:
-            logger.info(f"🔍 НАЧАЛО ОБРАБОТКИ сообщения {message.id}")
+            logger.info(f"🔍 Обработка сообщения {message.id}")
             
             full_content = extract_full_content(message)
             if not full_content:
                 logger.warning("⚠️ Пустой контент после извлечения")
-                # Отправляем предупреждение в Telegram
-                warn_msg = f"⚠️ Пустое сообщение от Dawn (ID: {message.id})"
-                send_telegram(TELEGRAM_BOT_CHAT_ID, warn_msg)
                 return
             
-            logger.info(f"📄 Текст после замены ролей: {full_content[:200]}...")
+            logger.info(f"📄 Текст: {full_content[:100]}...")
             
             found_items = []
             lower_content = full_content.lower()
@@ -254,13 +298,10 @@ class SelfBot(discord.Client):
                         break
             
             current_time = datetime.now().strftime('%H:%M:%S')
-            
-            # Подготовка текста для отправки
             safe_content = html.escape(full_content[:1500])
             
-            # Формируем сообщение с точным временем
             if found_items:
-                # Отправляем стикеры
+                # Стикеры в канал
                 for item_name in found_items:
                     item_config = TARGET_ITEMS[item_name]
                     self.found_items_count[item_name] += 1
@@ -285,15 +326,13 @@ class SelfBot(discord.Client):
                     f"<pre>{safe_content}</pre>"
                 )
             
-            # Отправляем результат
-            logger.info("📤 Отправляю результат в Telegram")
+            # Отправляем
             send_telegram(TELEGRAM_BOT_CHAT_ID, bot_message)
-            logger.info(f"✅ Обработка сообщения {message.id} завершена")
+            logger.info(f"✅ Сообщение {message.id} обработано")
             
         except Exception as e:
             logger.error(f"💥 Ошибка обработки: {e}")
-            error_msg = f"⚠️ Ошибка обработки сообщения {message.id}: {str(e)[:100]}"
-            send_telegram(TELEGRAM_BOT_CHAT_ID, error_msg)
+            await self.handle_error(f"Ошибка обработки: {e}")
 
 # ==================== ЗАПУСК ====================
 async def main():
@@ -302,9 +341,18 @@ async def main():
         logger.error("❌ USER_TOKEN не найден")
         return
     
-    bot = SelfBot()
+    # Настраиваем intents
+    intents = discord.Intents.default()
+    intents.message_content = True
+    intents.guilds = True
+    
+    bot = SelfBot(intents=intents)
+    
     try:
         await bot.start(USER_TOKEN)
+    except discord.LoginFailure:
+        logger.error("❌ Ошибка входа - неверный токен или аккаунт заблокирован")
+        send_telegram(TELEGRAM_BOT_CHAT_ID, "🚨 <b>Аккаунт Discord заблокирован!</b>\nТребуется новый токен.")
     except Exception as e:
         logger.error(f"❌ Ошибка запуска: {e}")
         await bot.close()
