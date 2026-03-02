@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Резервный селф-бот для мониторинга стока
-С WebSocket подключением и полной обработкой ошибок
+Версия для старой библиотеки discord.py-self
 """
 
 import discord
@@ -130,27 +130,19 @@ def send_telegram_sticker(chat_id, sticker_id):
         logger.error(f'❌ Sticker error: {e}')
         return False
 
-# ==================== ИСПРАВЛЕННАЯ ФУНКЦИЯ ИЗВЛЕЧЕНИЯ ТЕКСТА ====================
+# ==================== ФУНКЦИЯ ИЗВЛЕЧЕНИЯ ТЕКСТА ====================
 def extract_full_content(message):
     """Извлекает весь текст из сообщения Discord"""
     full_content = ""
     
-    # 1. Пробуем получить текст из компонентов (кнопки, селекты)
-    if hasattr(message, 'components') and message.components:
-        for component in message.components:
-            if hasattr(component, 'children'):
-                for child in component.children:
-                    if hasattr(child, 'label') and child.label:
-                        full_content += f"{child.label}\n"
-    
-    # 2. Обычный текст сообщения
+    # Обычный текст сообщения
     if message.content:
         content = message.content
         for role_id, role_name in ROLE_NAMES.items():
             content = content.replace(f'<@&{role_id}>', role_name)
         full_content += f"{content}\n"
     
-    # 3. Эмбеды
+    # Эмбеды
     if message.embeds:
         for embed in message.embeds:
             if embed.title:
@@ -185,8 +177,8 @@ def extract_full_content(message):
 
 # ==================== ОСНОВНОЙ КЛАСС БОТА ====================
 class SelfBot(discord.Client):
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def __init__(self):
+        super().__init__()
         
         # Загружаем состояние
         state = load_state()
@@ -196,6 +188,7 @@ class SelfBot(discord.Client):
         self.max_cache_size = 100
         self.started = False
         self.last_error_time = None
+        self.polling_task = None
         
     async def on_ready(self):
         logger.info(f'✅ Резервный селф-бот {self.user} запущен!')
@@ -214,6 +207,9 @@ class SelfBot(discord.Client):
         
         # Сохраняем состояние каждые 5 минут
         self.loop.create_task(self.auto_save())
+        
+        # Запускаем polling (как запасной вариант)
+        self.polling_task = self.loop.create_task(self.poll_channel())
     
     async def auto_save(self):
         """Автоматическое сохранение состояния"""
@@ -223,13 +219,53 @@ class SelfBot(discord.Client):
             save_state(state)
             logger.info("💾 Состояние сохранено")
     
+    async def poll_channel(self):
+        """Запасной polling на случай пропущенных сообщений"""
+        await self.wait_until_ready()
+        
+        while not self.is_closed():
+            try:
+                channel = self.get_channel(self.channel_id)
+                if not channel:
+                    logger.error(f"❌ Канал {self.channel_id} не найден")
+                    await asyncio.sleep(60)
+                    continue
+                
+                # Получаем последние 3 сообщения
+                messages = []
+                async for msg in channel.history(limit=3):
+                    messages.append(msg)
+                
+                for message in messages:
+                    if message.id in self.processed_messages:
+                        continue
+                    
+                    if 'dawn' not in message.author.name.lower():
+                        continue
+                    
+                    logger.info(f"📨 Polling нашел сообщение {message.id}")
+                    await self.process_stock_message(message)
+                    
+                    self.processed_messages.add(message.id)
+                    if len(self.processed_messages) > self.max_cache_size:
+                        self.processed_messages.pop()
+                
+                # Случайная задержка 25-35 секунд
+                delay = random.uniform(25, 35)
+                await asyncio.sleep(delay)
+                
+            except Exception as e:
+                logger.error(f"❌ Ошибка в poll_channel: {e}")
+                await asyncio.sleep(60)
+    
     async def on_message(self, message):
-        """Обработка новых сообщений (WebSocket режим)"""
+        """Обработка новых сообщений (WebSocket)"""
         try:
-            # Проверяем канал и автора
+            # Проверяем канал
             if message.channel.id != self.channel_id:
                 return
             
+            # Проверяем автора
             if 'dawn' not in message.author.name.lower():
                 return
             
@@ -283,6 +319,8 @@ class SelfBot(discord.Client):
             full_content = extract_full_content(message)
             if not full_content:
                 logger.warning("⚠️ Пустой контент после извлечения")
+                # Отправляем предупреждение
+                send_telegram(TELEGRAM_BOT_CHAT_ID, f"⚠️ Пустое сообщение от Dawn (ID: {message.id})")
                 return
             
             logger.info(f"📄 Текст: {full_content[:100]}...")
@@ -341,12 +379,7 @@ async def main():
         logger.error("❌ USER_TOKEN не найден")
         return
     
-    # Настраиваем intents
-    intents = discord.Intents.default()
-    intents.message_content = True
-    intents.guilds = True
-    
-    bot = SelfBot(intents=intents)
+    bot = SelfBot()
     
     try:
         await bot.start(USER_TOKEN)
