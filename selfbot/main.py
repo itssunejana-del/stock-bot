@@ -125,7 +125,7 @@ class SelfBot(discord.Client):
                     await asyncio.sleep(60)
                     continue
                 
-                messages = await channel.history(limit=3).flatten()
+                messages = [msg async for msg in channel.history(limit=3)]
                 
                 for message in messages:
                     if message.id in self.processed_messages:
