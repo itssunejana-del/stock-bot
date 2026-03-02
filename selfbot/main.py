@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Резервный селф-бот для мониторинга стока (полная версия с ролями)
-С ПРИНУДИТЕЛЬНОЙ отправкой в Telegram
+Резервный селф-бот для мониторинга стока
+С исправленной функцией извлечения текста и точным временем
 """
 
 import discord
@@ -116,17 +116,19 @@ def send_telegram_sticker(chat_id, sticker_id):
         logger.error(f'❌ Ошибка отправки стикера: {e}')
         return False
 
-# ==================== ФУНКЦИЯ ИЗВЛЕЧЕНИЯ ТЕКСТА ====================
+# ==================== ИСПРАВЛЕННАЯ ФУНКЦИЯ ИЗВЛЕЧЕНИЯ ТЕКСТА ====================
 def extract_full_content(message):
     """Извлекает весь текст из сообщения Discord и заменяет роли на названия"""
     full_content = ""
     
+    # Обрабатываем основной текст сообщения
     if message.content:
         content = message.content
         for role_id, role_name in ROLE_NAMES.items():
             content = content.replace(f'<@&{role_id}>', role_name)
         full_content += f"{content}\n\n"
     
+    # Обрабатываем эмбеды
     if message.embeds:
         for embed in message.embeds:
             if embed.title:
@@ -138,12 +140,22 @@ def extract_full_content(message):
                 full_content += f"{desc}\n"
             if embed.fields:
                 for field in embed.fields:
-                    full_content += f"\n{field.name}\n{field.value}\n"
+                    field_name = field.name
+                    field_value = field.value
+                    for role_id, role_name in ROLE_NAMES.items():
+                        field_name = field_name.replace(f'<@&{role_id}>', role_name)
+                        field_value = field_value.replace(f'<@&{role_id}>', role_name)
+                    full_content += f"{field_name}: {field_value}\n"
             if embed.footer and embed.footer.text:
-                full_content += f"\n{embed.footer.text}\n"
+                footer = embed.footer.text
+                for role_id, role_name in ROLE_NAMES.items():
+                    footer = footer.replace(f'<@&{role_id}>', role_name)
+                full_content += f"{footer}\n"
     
+    # Очистка от лишнего
     full_content = re.sub(r'<:[^:]+:\d+>', '', full_content)
     full_content = re.sub(r'\*\*', '', full_content)
+    full_content = re.sub(r'<t:\d+:[A-Za-z]+>', '', full_content)  # убираем временные метки
     full_content = html.escape(full_content)
     full_content = '\n'.join([line.strip() for line in full_content.split('\n') if line.strip()])
     
@@ -162,11 +174,12 @@ class SelfBot(discord.Client):
     async def on_ready(self):
         logger.info(f'✅ Резервный селф-бот {self.user} запущен!')
         
-        # 🔥 ПРИНУДИТЕЛЬНОЕ ТЕСТОВОЕ СООБЩЕНИЕ ПРИ ЗАПУСКЕ
+        # Тестовое сообщение при запуске
         if not self.started:
+            current_time = datetime.now().strftime('%H:%M:%S')
             test_message = (
                 f"🤖 <b>Бот запущен!</b>\n"
-                f"⏰ Время: {datetime.now().strftime('%H:%M:%S')}\n"
+                f"⏰ Время: {current_time}\n"
                 f"📊 Статус: ✅ Подключен к Discord\n"
                 f"📡 Канал: {self.channel_id}\n\n"
                 f"🔍 Отслеживаю: 🍒 🥬 🎋 🥭"
@@ -198,7 +211,7 @@ class SelfBot(discord.Client):
                     
                     logger.info(f"📨 Сообщение от Dawn (ID: {message.id})")
                     
-                    # 🔥 ПРИНУДИТЕЛЬНО отправляем уведомление о получении сообщения
+                    # Уведомление о получении сообщения
                     notify = f"📥 Получено сообщение от Dawn (ID: {message.id})"
                     send_telegram(TELEGRAM_BOT_CHAT_ID, notify)
                     
@@ -223,6 +236,9 @@ class SelfBot(discord.Client):
             full_content = extract_full_content(message)
             if not full_content:
                 logger.warning("⚠️ Пустой контент после извлечения")
+                # Отправляем предупреждение в Telegram
+                warn_msg = f"⚠️ Пустое сообщение от Dawn (ID: {message.id})"
+                send_telegram(TELEGRAM_BOT_CHAT_ID, warn_msg)
                 return
             
             logger.info(f"📄 Текст после замены ролей: {full_content[:200]}...")
@@ -239,10 +255,10 @@ class SelfBot(discord.Client):
             
             current_time = datetime.now().strftime('%H:%M:%S')
             
-            # 🔥 ПРИНУДИТЕЛЬНАЯ отправка ВСЕГДА
-            safe_content = html.escape(full_content[:1500])  # Уменьшил до 1500 для надежности
+            # Подготовка текста для отправки
+            safe_content = html.escape(full_content[:1500])
             
-            # Всегда отправляем что-то в Telegram
+            # Формируем сообщение с точным временем
             if found_items:
                 # Отправляем стикеры
                 for item_name in found_items:
@@ -256,7 +272,7 @@ class SelfBot(discord.Client):
                 found_items_list = "\n".join([f"• {TARGET_ITEMS[name]['emoji']} {TARGET_ITEMS[name]['display_name']}" for name in found_items])
                 
                 bot_message = (
-                    f"🎯 <b>Найдены предметы в {current_time}:</b>\n"
+                    f"🎯 <b>Найдены предметы в {current_time}</b>\n"
                     f"{found_items_list}\n\n"
                     f"📋 <b>Сток:</b>\n"
                     f"<pre>{safe_content}</pre>"
@@ -269,14 +285,13 @@ class SelfBot(discord.Client):
                     f"<pre>{safe_content}</pre>"
                 )
             
-            # Отправляем
+            # Отправляем результат
             logger.info("📤 Отправляю результат в Telegram")
             send_telegram(TELEGRAM_BOT_CHAT_ID, bot_message)
             logger.info(f"✅ Обработка сообщения {message.id} завершена")
             
         except Exception as e:
             logger.error(f"💥 Ошибка обработки: {e}")
-            # Даже при ошибке шлем уведомление
             error_msg = f"⚠️ Ошибка обработки сообщения {message.id}: {str(e)[:100]}"
             send_telegram(TELEGRAM_BOT_CHAT_ID, error_msg)
 
