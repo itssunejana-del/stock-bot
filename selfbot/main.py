@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Резервный селф-бот для мониторинга стока (исправленная версия с Dawn)
+Резервный селф-бот для мониторинга стока (полная версия с ролями)
 """
 
 import discord
@@ -16,7 +16,7 @@ import re
 from flask import Flask
 import threading
 
-# Простой Flask сервер, чтобы Render был доволен
+# ==================== ВЕБ-СЕРВЕР ДЛЯ RENDER ====================
 app = Flask(__name__)
 
 @app.route('/')
@@ -29,41 +29,27 @@ def run_web():
 # Запускаем Flask в отдельном потоке
 threading.Thread(target=run_web, daemon=True).start()
 
-# Настройка логирования
+# ==================== НАСТРОЙКА ЛОГГИРОВАНИЯ ====================
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# Telegram функции
+# ==================== ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ====================
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_BOT_CHAT_ID = os.getenv('TELEGRAM_BOT_CHAT_ID')
 STOCKS_TELEGRAM_CHANNEL = os.getenv('STOCKS_TELEGRAM_CHANNEL')
 
-def send_telegram(chat_id, text, parse_mode="HTML"):
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-        data = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
-        response = requests.post(url, json=data, timeout=10)
-        if response.status_code == 200:
-            logger.info(f"✅ Telegram отправлено")
-            return True
-        else:
-            logger.error(f"❌ Telegram ошибка {response.status_code}")
-            return False
-    except Exception as e:
-        logger.error(f'❌ Telegram error: {e}')
-        return False
+# ==================== СЛОВАРЬ РОЛЕЙ ====================
+# ID ролей Discord → названия предметов
+ROLE_NAMES = {
+    '1477643077882609755': 'Mango',      # 🥭 Mango
+    '1477643000073949214': 'Bamboo',     # 🎋 Bamboo
+    '1442312884859179049': 'Cabbage',    # 🥬 Cabbage
+    '1426610862591840266': 'Cherry',     # 🍒 Cherry
+    '1439345675690049666': 'Carrot',     # 🥕 Carrot (для проверки)
+}
 
-def send_telegram_sticker(chat_id, sticker_id):
-    try:
-        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendSticker"
-        data = {"chat_id": chat_id, "sticker": sticker_id}
-        response = requests.post(url, json=data, timeout=10)
-        return response.status_code == 200
-    except Exception as e:
-        logger.error(f'❌ Sticker error: {e}')
-        return False
-
-# Твои целевые предметы
+# ==================== ЦЕЛЕВЫЕ ПРЕДМЕТЫ ====================
+# Только для этих предметов будут стикеры и отметка "Найдено"
 TARGET_ITEMS = {
     'cherry': {
         'keywords': ['cherry', '🍒'],
@@ -91,25 +77,65 @@ TARGET_ITEMS = {
     }
 }
 
+# ==================== ФУНКЦИИ TELEGRAM ====================
+def send_telegram(chat_id, text, parse_mode="HTML"):
+    """Отправляет текстовое сообщение в Telegram"""
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+        data = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
+        response = requests.post(url, json=data, timeout=10)
+        if response.status_code == 200:
+            logger.info(f"✅ Telegram отправлено")
+            return True
+        else:
+            logger.error(f"❌ Telegram ошибка {response.status_code}")
+            return False
+    except Exception as e:
+        logger.error(f'❌ Telegram error: {e}')
+        return False
+
+def send_telegram_sticker(chat_id, sticker_id):
+    """Отправляет стикер в Telegram"""
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendSticker"
+        data = {"chat_id": chat_id, "sticker": sticker_id}
+        response = requests.post(url, json=data, timeout=10)
+        return response.status_code == 200
+    except Exception as e:
+        logger.error(f'❌ Sticker error: {e}')
+        return False
+
+# ==================== ФУНКЦИЯ ИЗВЛЕЧЕНИЯ ТЕКСТА ====================
 def extract_full_content(message):
-    """Извлекает весь текст из сообщения Discord"""
+    """Извлекает весь текст из сообщения Discord и заменяет роли на названия"""
     full_content = ""
     
+    # Обрабатываем основной текст сообщения
     if message.content:
-        full_content += f"{message.content}\n\n"
+        content = message.content
+        # Заменяем упоминания ролей на названия
+        for role_id, role_name in ROLE_NAMES.items():
+            content = content.replace(f'<@&{role_id}>', role_name)
+        full_content += f"{content}\n\n"
     
+    # Обрабатываем эмбеды
     if message.embeds:
         for embed in message.embeds:
             if embed.title:
                 full_content += f"{embed.title}\n"
             if embed.description:
-                full_content += f"{embed.description}\n"
+                # Тоже заменяем роли в описании эмбеда
+                desc = embed.description
+                for role_id, role_name in ROLE_NAMES.items():
+                    desc = desc.replace(f'<@&{role_id}>', role_name)
+                full_content += f"{desc}\n"
             if embed.fields:
                 for field in embed.fields:
                     full_content += f"\n{field.name}\n{field.value}\n"
             if embed.footer and embed.footer.text:
                 full_content += f"\n{embed.footer.text}\n"
     
+    # Очистка от лишнего
     full_content = re.sub(r'<:[^:]+:\d+>', '', full_content)
     full_content = re.sub(r'\*\*', '', full_content)
     full_content = html.escape(full_content)
@@ -117,6 +143,7 @@ def extract_full_content(message):
     
     return full_content.strip()
 
+# ==================== ОСНОВНОЙ КЛАСС БОТА ====================
 class SelfBot(discord.Client):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -141,14 +168,14 @@ class SelfBot(discord.Client):
                     await asyncio.sleep(60)
                     continue
                 
-                # Получаем последние 3 сообщения (исправленный синтаксис)
+                # Получаем последние 3 сообщения
                 messages = [msg async for msg in channel.history(limit=3)]
                 
                 for message in messages:
                     if message.id in self.processed_messages:
                         continue
                     
-                    # 🔴 ИСПРАВЛЕНО: теперь ищем Dawn, а не Kiro
+                    # Проверяем автора (бот Dawn)
                     if 'dawn' not in message.author.name.lower():
                         continue
                     
@@ -175,6 +202,7 @@ class SelfBot(discord.Client):
             if not full_content:
                 return
             
+            # Поиск целевых предметов
             found_items = []
             lower_content = full_content.lower()
             
@@ -187,7 +215,9 @@ class SelfBot(discord.Client):
             
             current_time = datetime.now().strftime('%H:%M:%S')
             
+            # Отправка в Telegram
             if found_items:
+                # Стикеры в канал (только для найденных предметов)
                 for item_name in found_items:
                     item_config = TARGET_ITEMS[item_name]
                     self.found_items_count[item_name] += 1
@@ -195,22 +225,23 @@ class SelfBot(discord.Client):
                     if item_config['sticker_id']:
                         send_telegram_sticker(STOCKS_TELEGRAM_CHANNEL, item_config['sticker_id'])
                 
+                # Текстовое уведомление в личку бота (со всем стоком)
                 found_items_list = "\n".join([f"• {TARGET_ITEMS[name]['emoji']} {TARGET_ITEMS[name]['display_name']}" for name in found_items])
                 
                 bot_message = (
                     f"🎯 <b>Найдены предметы в {current_time}:</b>\n"
                     f"{found_items_list}\n\n"
-                    f"📋 <b>Сток:</b>\n"
+                    f"📋 <b>Полный сток:</b>\n"
                     f"<pre>{full_content[:3000]}</pre>\n\n"
                     f"#сток"
                 )
                 send_telegram(TELEGRAM_BOT_CHAT_ID, bot_message)
             else:
-                # Можно закомментировать, если не хочешь получать пустые уведомления
+                # Информационное сообщение в личку бота (когда нет целевых предметов)
                 bot_message = (
                     f"📊 <b>Сток в {current_time}</b>\n"
                     f"🎯 Целевые предметы: не найдены\n\n"
-                    f"📋 <b>Сток:</b>\n"
+                    f"📋 <b>Полный сток:</b>\n"
                     f"<pre>{full_content[:3000]}</pre>"
                 )
                 send_telegram(TELEGRAM_BOT_CHAT_ID, bot_message)
@@ -218,6 +249,7 @@ class SelfBot(discord.Client):
         except Exception as e:
             logger.error(f"💥 Ошибка обработки: {e}")
 
+# ==================== ЗАПУСК ====================
 async def main():
     USER_TOKEN = os.getenv('USER_TOKEN')
     if not USER_TOKEN:
