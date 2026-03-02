@@ -135,7 +135,7 @@ def send_telegram_sticker(chat_id, sticker_id):
 
 # ==================== ПРАВИЛЬНЫЙ ПАРСЕР ДЛЯ СООБЩЕНИЙ DAWN ====================
 def extract_full_content(message):
-    """ОТЛАДОЧНАЯ версия - подробно показывает все компоненты"""
+    """ОТЛАДОЧНАЯ версия - показывает всех детей"""
     result = []
     
     result.append(f"=== СООБЩЕНИЕ ID: {message.id} ===")
@@ -151,7 +151,32 @@ def extract_full_content(message):
             result.append(f"--- ГЛАВНЫЙ КОМПОНЕНТ {i} ---")
             result.append(f"Тип: {main_comp.type}")
             
-            # Проверяем дочерние компоненты
+            # Проверяем детей (children)
+            if hasattr(main_comp, 'children') and main_comp.children:
+                result.append(f"ДЕТЕЙ (children): {len(main_comp.children)}")
+                
+                for j, child in enumerate(main_comp.children):
+                    result.append(f"")
+                    result.append(f"  >>> РЕБЕНОК {j} <<<")
+                    result.append(f"  Тип: {child.type}")
+                    
+                    # Все возможные места для текста
+                    if hasattr(child, 'content') and child.content:
+                        result.append(f"  CONTENT: {child.content}")
+                    
+                    if hasattr(child, 'label') and child.label:
+                        result.append(f"  LABEL: {child.label}")
+                    
+                    if hasattr(child, 'value') and child.value:
+                        result.append(f"  VALUE: {child.value}")
+                    
+                    if hasattr(child, 'placeholder') and child.placeholder:
+                        result.append(f"  PLACEHOLDER: {child.placeholder}")
+                    
+                    if hasattr(child, 'text') and child.text:
+                        result.append(f"  TEXT: {child.text}")
+            
+            # Проверяем дочерние компоненты (components)
             if hasattr(main_comp, 'components') and main_comp.components:
                 result.append(f"ДОЧЕРНИХ КОМПОНЕНТОВ: {len(main_comp.components)}")
                 
@@ -160,23 +185,11 @@ def extract_full_content(message):
                     result.append(f"  >>> ПОДКОМПОНЕНТ {j} <<<")
                     result.append(f"  Тип: {sub_comp.type}")
                     
-                    # Пытаемся найти текст в разных местах
                     if hasattr(sub_comp, 'content') and sub_comp.content:
-                        result.append(f"  CONTENT НАЙДЕН!")
-                        result.append(f"  Текст: {sub_comp.content}")
+                        result.append(f"  CONTENT: {sub_comp.content}")
                     
                     if hasattr(sub_comp, 'label') and sub_comp.label:
                         result.append(f"  LABEL: {sub_comp.label}")
-                    
-                    if hasattr(sub_comp, 'value') and sub_comp.value:
-                        result.append(f"  VALUE: {sub_comp.value}")
-                    
-                    if hasattr(sub_comp, 'placeholder') and sub_comp.placeholder:
-                        result.append(f"  PLACEHOLDER: {sub_comp.placeholder}")
-            
-            # Проверяем наличие кнопок
-            if hasattr(main_comp, 'children') and main_comp.children:
-                result.append(f"ДЕТЕЙ (children): {len(main_comp.children)}")
     
     else:
         result.append("КОМПОНЕНТОВ НЕТ")
