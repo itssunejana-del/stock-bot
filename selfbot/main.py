@@ -135,32 +135,40 @@ def send_telegram_sticker(chat_id, sticker_id):
 
 # ==================== ПРАВИЛЬНЫЙ ПАРСЕР ДЛЯ СООБЩЕНИЙ DAWN ====================
 def extract_full_content(message):
-    """Парсер для сообщений Dawn - извлекает текст из компонентов"""
-    full_content = []
+    """ОТЛАДОЧНАЯ версия - показывает всё, что есть в сообщении"""
+    result = []
     
-    # Проходим по компонентам сообщения
+    result.append(f"=== Сообщение ID: {message.id} ===")
+    
+    # Показываем компоненты
     if hasattr(message, 'components') and message.components:
-        for main_component in message.components:
-            if hasattr(main_component, 'components'):
-                for sub_component in main_component.components:
-                    # Ищем текстовые компоненты (type 10)
-                    if hasattr(sub_component, 'content') and sub_component.content:
-                        content = sub_component.content
-                        # Заменяем упоминания ролей на названия
-                        for role_id, role_name in ROLE_NAMES.items():
-                            content = content.replace(f'<@&{role_id}>', role_name)
-                        full_content.append(content)
+        result.append(f"Компонентов: {len(message.components)}")
+        for i, main_comp in enumerate(message.components):
+            result.append(f"  Компонент {i}: type={main_comp.type}")
+            if hasattr(main_comp, 'components'):
+                result.append(f"    Дочерних: {len(main_comp.components)}")
+                for j, sub_comp in enumerate(main_comp.components):
+                    result.append(f"    Подкомпонент {j}: type={sub_comp.type}")
+                    if hasattr(sub_comp, 'content'):
+                        result.append(f"      content: {sub_comp.content[:200]}")
+                    if hasattr(sub_comp, 'label'):
+                        result.append(f"      label: {sub_comp.label}")
     
-    # Объединяем всё в один текст
-    result = '\n'.join(full_content)
+    # Показываем контент (если есть)
+    if message.content:
+        result.append(f"content: {message.content[:200]}")
     
-    # Очистка от лишнего
-    result = re.sub(r'<:[^:]+:\d+>', '', result)
-    result = re.sub(r'\*\*', '', result)
-    result = re.sub(r'<t:\d+:[A-Za-z]+>', '', result)
-    result = html.escape(result)
+    # Показываем эмбеды
+    if message.embeds:
+        result.append(f"embeds: {len(message.embeds)}")
+        for i, embed in enumerate(message.embeds):
+            result.append(f"  Embed {i}:")
+            if embed.title:
+                result.append(f"    title: {embed.title}")
+            if embed.description:
+                result.append(f"    description: {embed.description[:200]}")
     
-    return result.strip()
+    return "\n".join(result)
 
 # ==================== ОСНОВНОЙ КЛАСС БОТА ====================
 class SelfBot(discord.Client):
