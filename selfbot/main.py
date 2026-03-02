@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Резервный селф-бот для мониторинга стока (полная версия с ролями)
+С исправленными Telegram функциями из старого кода
 """
 
 import discord
@@ -8,6 +9,7 @@ import os
 import asyncio
 import requests
 import random
+import time  # Добавлено для обработки 429 ошибок
 from datetime import datetime
 import logging
 import html
@@ -77,22 +79,33 @@ TARGET_ITEMS = {
     }
 }
 
-# ==================== ФУНКЦИИ TELEGRAM ====================
+# ==================== TELEGRAM ФУНКЦИИ (из старого кода) ====================
 def send_telegram(chat_id, text, parse_mode="HTML"):
-    """Отправляет текстовое сообщение в Telegram"""
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
         data = {"chat_id": chat_id, "text": text, "parse_mode": parse_mode}
         response = requests.post(url, json=data, timeout=10)
+        
         if response.status_code == 200:
-            logger.info(f"✅ Telegram отправлено")
+            logger.info(f"✅ Telegram отправлено в {chat_id}")
             return True
+        elif response.status_code == 429:
+            retry_after = response.json().get('parameters', {}).get('retry_after', 30)
+            logger.warning(f"⚠️ Лимит Telegram, жду {retry_after} сек")
+            time.sleep(retry_after)
+            return False
         else:
-            logger.error(f"❌ Telegram ошибка {response.status_code}")
+            logger.error(f"❌ Telegram ошибка {response.status_code}: {response.text[:100]}")
             return False
     except Exception as e:
         logger.error(f'❌ Telegram error: {e}')
         return False
+
+def send_to_bot(text):
+    """Отправляет сообщение в личку бота"""
+    if TELEGRAM_BOT_CHAT_ID:
+        return send_telegram(TELEGRAM_BOT_CHAT_ID, text)
+    return False
 
 def send_telegram_sticker(chat_id, sticker_id):
     """Отправляет стикер в Telegram"""
@@ -100,9 +113,14 @@ def send_telegram_sticker(chat_id, sticker_id):
         url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendSticker"
         data = {"chat_id": chat_id, "sticker": sticker_id}
         response = requests.post(url, json=data, timeout=10)
-        return response.status_code == 200
+        if response.status_code == 200:
+            logger.info(f"📢 Стикер отправлен в канал")
+            return True
+        else:
+            logger.error(f"❌ Ошибка отправки стикера: {response.status_code}")
+            return False
     except Exception as e:
-        logger.error(f'❌ Sticker error: {e}')
+        logger.error(f'❌ Ошибка отправки стикера: {e}')
         return False
 
 # ==================== ФУНКЦИЯ ИЗВЛЕЧЕНИЯ ТЕКСТА ====================
@@ -228,21 +246,26 @@ class SelfBot(discord.Client):
                 # Текстовое уведомление в личку бота (со всем стоком)
                 found_items_list = "\n".join([f"• {TARGET_ITEMS[name]['emoji']} {TARGET_ITEMS[name]['display_name']}" for name in found_items])
                 
+                # Экранируем HTML в содержимом
+                safe_content = html.escape(full_content[:3000])
+                
                 bot_message = (
                     f"🎯 <b>Найдены предметы в {current_time}:</b>\n"
                     f"{found_items_list}\n\n"
                     f"📋 <b>Полный сток:</b>\n"
-                    f"<pre>{full_content[:3000]}</pre>\n\n"
+                    f"<pre>{safe_content}</pre>\n\n"
                     f"#сток"
                 )
                 send_telegram(TELEGRAM_BOT_CHAT_ID, bot_message)
             else:
                 # Информационное сообщение в личку бота (когда нет целевых предметов)
+                safe_content = html.escape(full_content[:3000])
+                
                 bot_message = (
                     f"📊 <b>Сток в {current_time}</b>\n"
                     f"🎯 Целевые предметы: не найдены\n\n"
                     f"📋 <b>Полный сток:</b>\n"
-                    f"<pre>{full_content[:3000]}</pre>"
+                    f"<pre>{safe_content}</pre>"
                 )
                 send_telegram(TELEGRAM_BOT_CHAT_ID, bot_message)
                 
