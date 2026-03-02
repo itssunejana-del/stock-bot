@@ -135,38 +135,69 @@ def send_telegram_sticker(chat_id, sticker_id):
 
 # ==================== ПРАВИЛЬНЫЙ ПАРСЕР ДЛЯ СООБЩЕНИЙ DAWN ====================
 def extract_full_content(message):
-    """ОТЛАДОЧНАЯ версия - показывает всё, что есть в сообщении"""
+    """ОТЛАДОЧНАЯ версия - подробно показывает все компоненты"""
     result = []
     
-    result.append(f"=== Сообщение ID: {message.id} ===")
+    result.append(f"=== СООБЩЕНИЕ ID: {message.id} ===")
+    result.append(f"Автор: {message.author.name}")
+    result.append(f"Канал: {message.channel.id}")
     
-    # Показываем компоненты
+    # ПРОВЕРЯЕМ КОМПОНЕНТЫ
     if hasattr(message, 'components') and message.components:
-        result.append(f"Компонентов: {len(message.components)}")
+        result.append(f"КОМПОНЕНТОВ ВСЕГО: {len(message.components)}")
+        
         for i, main_comp in enumerate(message.components):
-            result.append(f"  Компонент {i}: type={main_comp.type}")
-            if hasattr(main_comp, 'components'):
-                result.append(f"    Дочерних: {len(main_comp.components)}")
+            result.append(f"")
+            result.append(f"--- ГЛАВНЫЙ КОМПОНЕНТ {i} ---")
+            result.append(f"Тип: {main_comp.type}")
+            
+            # Проверяем дочерние компоненты
+            if hasattr(main_comp, 'components') and main_comp.components:
+                result.append(f"ДОЧЕРНИХ КОМПОНЕНТОВ: {len(main_comp.components)}")
+                
                 for j, sub_comp in enumerate(main_comp.components):
-                    result.append(f"    Подкомпонент {j}: type={sub_comp.type}")
-                    if hasattr(sub_comp, 'content'):
-                        result.append(f"      content: {sub_comp.content[:200]}")
-                    if hasattr(sub_comp, 'label'):
-                        result.append(f"      label: {sub_comp.label}")
+                    result.append(f"")
+                    result.append(f"  >>> ПОДКОМПОНЕНТ {j} <<<")
+                    result.append(f"  Тип: {sub_comp.type}")
+                    
+                    # Пытаемся найти текст в разных местах
+                    if hasattr(sub_comp, 'content') and sub_comp.content:
+                        result.append(f"  CONTENT НАЙДЕН!")
+                        result.append(f"  Текст: {sub_comp.content}")
+                    
+                    if hasattr(sub_comp, 'label') and sub_comp.label:
+                        result.append(f"  LABEL: {sub_comp.label}")
+                    
+                    if hasattr(sub_comp, 'value') and sub_comp.value:
+                        result.append(f"  VALUE: {sub_comp.value}")
+                    
+                    if hasattr(sub_comp, 'placeholder') and sub_comp.placeholder:
+                        result.append(f"  PLACEHOLDER: {sub_comp.placeholder}")
+            
+            # Проверяем наличие кнопок
+            if hasattr(main_comp, 'children') and main_comp.children:
+                result.append(f"ДЕТЕЙ (children): {len(main_comp.children)}")
     
-    # Показываем контент (если есть)
+    else:
+        result.append("КОМПОНЕНТОВ НЕТ")
+    
+    # ПРОВЕРЯЕМ ОБЫЧНЫЙ ТЕКСТ
     if message.content:
-        result.append(f"content: {message.content[:200]}")
+        result.append(f"")
+        result.append("--- ОБЫЧНЫЙ ТЕКСТ ---")
+        result.append(message.content)
     
-    # Показываем эмбеды
+    # ПРОВЕРЯЕМ ЭМБЕДЫ
     if message.embeds:
-        result.append(f"embeds: {len(message.embeds)}")
-        for i, embed in enumerate(message.embeds):
-            result.append(f"  Embed {i}:")
+        result.append(f"")
+        result.append(f"ЭМБЕДОВ: {len(message.embeds)}")
+        for k, embed in enumerate(message.embeds):
+            result.append(f"")
+            result.append(f"  === EMBED {k} ===")
             if embed.title:
-                result.append(f"    title: {embed.title}")
+                result.append(f"  Title: {embed.title}")
             if embed.description:
-                result.append(f"    description: {embed.description[:200]}")
+                result.append(f"  Description: {embed.description}")
     
     return "\n".join(result)
 
