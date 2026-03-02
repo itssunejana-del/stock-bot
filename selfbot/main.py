@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Резервный селф-бот для мониторинга стока
-С принудительной отправкой ссылок на все сообщения
+С правильным парсингом компонентов Discord
 """
 
 import discord
@@ -133,53 +133,34 @@ def send_telegram_sticker(chat_id, sticker_id):
         logger.error(f'❌ Sticker error: {e}')
         return False
 
-# ==================== ФУНКЦИЯ ИЗВЛЕЧЕНИЯ ТЕКСТА ====================
+# ==================== ПРАВИЛЬНЫЙ ПАРСЕР ДЛЯ СООБЩЕНИЙ DAWN ====================
 def extract_full_content(message):
-    """Извлекает текст из сообщения"""
-    full_content = ""
+    """Парсер для сообщений Dawn - извлекает текст из компонентов"""
+    full_content = []
     
-    # Эмбеды
-    if message.embeds:
-        for embed in message.embeds:
-            if embed.title:
-                full_content += f"{embed.title}\n"
-            if embed.description:
-                desc = embed.description
-                for role_id, role_name in ROLE_NAMES.items():
-                    desc = desc.replace(f'<@&{role_id}>', role_name)
-                full_content += f"{desc}\n"
-            if embed.fields:
-                for field in embed.fields:
-                    field_name = field.name
-                    field_value = field.value
-                    for role_id, role_name in ROLE_NAMES.items():
-                        field_name = field_name.replace(f'<@&{role_id}>', role_name)
-                        field_value = field_value.replace(f'<@&{role_id}>', role_name)
-                    full_content += f"{field_name}: {field_value}\n"
-    
-    # Обычный текст
-    if message.content:
-        content = message.content
-        for role_id, role_name in ROLE_NAMES.items():
-            content = content.replace(f'<@&{role_id}>', role_name)
-        full_content += f"{content}\n"
-    
-    # Кнопки
+    # Проходим по компонентам сообщения
     if hasattr(message, 'components') and message.components:
-        for component in message.components:
-            if hasattr(component, 'children'):
-                for child in component.children:
-                    if hasattr(child, 'label') and child.label:
-                        full_content += f"[{child.label}]\n"
+        for main_component in message.components:
+            if hasattr(main_component, 'components'):
+                for sub_component in main_component.components:
+                    # Ищем текстовые компоненты (type 10)
+                    if hasattr(sub_component, 'content') and sub_component.content:
+                        content = sub_component.content
+                        # Заменяем упоминания ролей на названия
+                        for role_id, role_name in ROLE_NAMES.items():
+                            content = content.replace(f'<@&{role_id}>', role_name)
+                        full_content.append(content)
     
-    # Очистка
-    full_content = re.sub(r'<:[^:]+:\d+>', '', full_content)
-    full_content = re.sub(r'\*\*', '', full_content)
-    full_content = re.sub(r'<t:\d+:[A-Za-z]+>', '', full_content)
-    full_content = html.escape(full_content)
-    full_content = '\n'.join([line.strip() for line in full_content.split('\n') if line.strip()])
+    # Объединяем всё в один текст
+    result = '\n'.join(full_content)
     
-    return full_content.strip()
+    # Очистка от лишнего
+    result = re.sub(r'<:[^:]+:\d+>', '', result)
+    result = re.sub(r'\*\*', '', result)
+    result = re.sub(r'<t:\d+:[A-Za-z]+>', '', result)
+    result = html.escape(result)
+    
+    return result.strip()
 
 # ==================== ОСНОВНОЙ КЛАСС БОТА ====================
 class SelfBot(discord.Client):
@@ -205,8 +186,7 @@ class SelfBot(discord.Client):
             f"📊 Статус: ✅ Подключен к Discord\n"
             f"📡 Канал: {self.channel_id}\n"
             f"💾 В памяти: {len(self.processed_messages)} сообщений\n\n"
-            f"🔍 Отслеживаю: 🍒 🥬 🎋 🥭\n\n"
-            f"📎 На каждое сообщение буду присылать ссылку"
+            f"🔍 Отслеживаю: 🍒 🥬 🎋 🥭"
         )
         send_telegram(TELEGRAM_BOT_CHAT_ID, test_message)
         
@@ -302,73 +282,54 @@ class SelfBot(discord.Client):
         try:
             logger.info(f"🔍 Обработка сообщения {message.id}")
             
-            # Всегда получаем свежую копию
-            try:
-                channel = await self.fetch_channel(self.channel_id)
-                fresh_message = await channel.fetch_message(message.id)
-                logger.info(f"📦 Получил свежую копию сообщения {message.id}")
-                message = fresh_message
-            except Exception as e:
-                logger.warning(f"⚠️ Не удалось получить свежую копию: {e}")
-            
-            # Извлекаем текст
             full_content = extract_full_content(message)
             
-            # Формируем ссылку на сообщение
-            guild_id = message.guild.id if message.guild else '@me'
-            msg_link = f"https://discord.com/channels/{guild_id}/{self.channel_id}/{message.id}"
-            
-            # ВСЕГДА отправляем ссылку в Telegram
-            link_message = f"🔗 <b>Новое сообщение от Dawn</b>\nID: {message.id}\nСсылка: {msg_link}"
-            send_telegram(TELEGRAM_BOT_CHAT_ID, link_message)
-            
-            # Если есть текст - отправляем и его тоже
             if full_content:
                 logger.info(f"✅ Текст извлечен: {full_content[:100]}...")
-                
-                found_items = []
-                lower_content = full_content.lower()
-                
-                for item_name, item_config in TARGET_ITEMS.items():
-                    for keyword in item_config['keywords']:
-                        if keyword.lower() in lower_content:
-                            found_items.append(item_name)
-                            logger.info(f"✅ НАЙДЕНО: {item_config['display_name']}")
-                            break
-                
-                current_time = datetime.now().strftime('%H:%M:%S')
-                safe_content = html.escape(full_content[:1500])
-                
-                if found_items:
-                    for item_name in found_items:
-                        item_config = TARGET_ITEMS[item_name]
-                        self.found_items_count[item_name] += 1
-                        
-                        if item_config['sticker_id']:
-                            logger.info(f"🎨 Отправляю стикер для {item_config['display_name']}")
-                            send_telegram_sticker(STOCKS_TELEGRAM_CHANNEL, item_config['sticker_id'])
-                    
-                    found_items_list = "\n".join([f"• {TARGET_ITEMS[name]['emoji']} {TARGET_ITEMS[name]['display_name']}" for name in found_items])
-                    
-                    bot_message = (
-                        f"🎯 <b>Найдены предметы в {current_time}</b>\n"
-                        f"{found_items_list}\n\n"
-                        f"📋 <b>Сток:</b>\n"
-                        f"<pre>{safe_content}</pre>"
-                    )
-                else:
-                    bot_message = (
-                        f"📊 <b>Сток в {current_time}</b>\n"
-                        f"🎯 Целевые предметы: не найдены\n\n"
-                        f"📋 <b>Сток:</b>\n"
-                        f"<pre>{safe_content}</pre>"
-                    )
-                
-                send_telegram(TELEGRAM_BOT_CHAT_ID, bot_message)
             else:
-                logger.warning("❌ Текст не извлечен, отправлена только ссылка")
+                logger.warning("❌ Не удалось извлечь текст")
+                return
             
-            logger.info(f"✅ Сообщение {message.id} обработано (ссылка отправлена)")
+            found_items = []
+            lower_content = full_content.lower()
+            
+            for item_name, item_config in TARGET_ITEMS.items():
+                for keyword in item_config['keywords']:
+                    if keyword.lower() in lower_content:
+                        found_items.append(item_name)
+                        logger.info(f"✅ НАЙДЕНО: {item_config['display_name']}")
+                        break
+            
+            current_time = datetime.now().strftime('%H:%M:%S')
+            safe_content = html.escape(full_content[:1500])
+            
+            if found_items:
+                for item_name in found_items:
+                    item_config = TARGET_ITEMS[item_name]
+                    self.found_items_count[item_name] += 1
+                    
+                    if item_config['sticker_id']:
+                        logger.info(f"🎨 Отправляю стикер для {item_config['display_name']}")
+                        send_telegram_sticker(STOCKS_TELEGRAM_CHANNEL, item_config['sticker_id'])
+                
+                found_items_list = "\n".join([f"• {TARGET_ITEMS[name]['emoji']} {TARGET_ITEMS[name]['display_name']}" for name in found_items])
+                
+                bot_message = (
+                    f"🎯 <b>Найдены предметы в {current_time}</b>\n"
+                    f"{found_items_list}\n\n"
+                    f"📋 <b>Сток:</b>\n"
+                    f"<pre>{safe_content}</pre>"
+                )
+            else:
+                bot_message = (
+                    f"📊 <b>Сток в {current_time}</b>\n"
+                    f"🎯 Целевые предметы: не найдены\n\n"
+                    f"📋 <b>Сток:</b>\n"
+                    f"<pre>{safe_content}</pre>"
+                )
+            
+            send_telegram(TELEGRAM_BOT_CHAT_ID, bot_message)
+            logger.info(f"✅ Сообщение {message.id} обработано")
             
         except Exception as e:
             logger.error(f"💥 Ошибка обработки: {e}")
