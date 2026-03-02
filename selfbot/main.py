@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Резервный селф-бот для мониторинга стока
-С приоритетом на эмбеды (исправленная версия)
+С приоритетом на эмбеды и поддержкой всех ролей
 """
 
 import discord
@@ -42,19 +42,20 @@ TELEGRAM_BOT_CHAT_ID = os.getenv('TELEGRAM_BOT_CHAT_ID')
 STOCKS_TELEGRAM_CHANNEL = os.getenv('STOCKS_TELEGRAM_CHANNEL')
 
 # ==================== СЛОВАРЬ РОЛЕЙ ====================
+# Только те, что нужны для поиска и проверки
 ROLE_NAMES = {
-    '1477643077882609755': 'Mango',
-    '1477643000073949214': 'Bamboo',
-    '1442312884859179049': 'Cabbage',
-    '1426610862591840266': 'Cherry',
-    '1439345675690049666': 'Carrot',
-    # Добавляем новые роли из сообщения
-    '1392620784870101002': 'Mushroom',
-    '1392622053278093473': 'Onion',
-    '1392622157460144198': 'Corn',
+    '1426610862591840266': 'Cherry',   # 🍒
+    '1442312884859179049': 'Cabbage',  # 🥬
+    '1477643000073949214': 'Bamboo',   # 🎋
+    '1477643077882609755': 'Mango',    # 🥭
+    '1439345675690049666': 'Carrot',   # 🥕 для проверки
+    '1392620784870101002': 'Mushroom', # 🍄 для контекста
+    '1392622053278093473': 'Onion',    # 🧅 для контекста
+    '1392622157460144198': 'Corn',     # 🌽 для контекста
 }
 
 # ==================== ЦЕЛЕВЫЕ ПРЕДМЕТЫ ====================
+# Только для этих будут стикеры
 TARGET_ITEMS = {
     'cherry': {
         'keywords': ['cherry', '🍒'],
@@ -176,27 +177,14 @@ def extract_full_content(message):
             clean = clean.replace(f'<@&{role_id}>', role_name)
         full_content += f"{clean}\n"
     
-    # 5. Компоненты (кнопки) - только если ничего другого нет
-    if not full_content.strip() and hasattr(message, 'components') and message.components:
+    # 5. Компоненты (кнопки) - добавляем, но помечаем, что это кнопки
+    if hasattr(message, 'components') and message.components:
         for component in message.components:
             if hasattr(component, 'children'):
                 for child in component.children:
                     if hasattr(child, 'label') and child.label:
-                        full_content += f"{child.label}\n"
-                    if hasattr(child, 'placeholder') and child.placeholder:
-                        full_content += f"{child.placeholder}\n"
-    
-    # 6. Сырой словарь (если совсем ничего нет)
-    if not full_content.strip():
-        try:
-            msg_dict = message.to_dict()
-            if 'content' in msg_dict and msg_dict['content']:
-                content = msg_dict['content']
-                for role_id, role_name in ROLE_NAMES.items():
-                    content = content.replace(f'<@&{role_id}>', role_name)
-                full_content += f"{content}\n"
-        except:
-            pass
+                        # Добавляем, но с пометкой, чтобы не путать со стоком
+                        full_content += f"[Кнопка: {child.label}]\n"
     
     # Очистка от лишнего
     full_content = re.sub(r'<:[^:]+:\d+>', '', full_content)
@@ -233,7 +221,8 @@ class SelfBot(discord.Client):
             f"📊 Статус: ✅ Подключен к Discord\n"
             f"📡 Канал: {self.channel_id}\n"
             f"💾 В памяти: {len(self.processed_messages)} сообщений\n\n"
-            f"🔍 Отслеживаю: 🍒 🥬 🎋 🥭"
+            f"🔍 Отслеживаю: 🍒 🥬 🎋 🥭\n"
+            f"📋 Для проверки: 🥕 Carrot"
         )
         send_telegram(TELEGRAM_BOT_CHAT_ID, test_message)
         
