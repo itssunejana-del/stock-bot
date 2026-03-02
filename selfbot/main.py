@@ -13,6 +13,22 @@ import logging
 import html
 import re
 
+from flask import Flask
+import threading
+
+# Простой Flask сервер, чтобы Render был доволен
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Bot is running!"
+
+def run_web():
+    app.run(host='0.0.0.0', port=10000)
+
+# Запускаем Flask в отдельном потоке
+threading.Thread(target=run_web, daemon=True).start()
+
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
